@@ -18,13 +18,19 @@ CURSOR_SKILLS="${HOME}/.cursor/skills/${SKILL_NAME}"
 mkdir -p "${GEMINI_GLOBAL}/scripts"
 mkdir -p "${AGENTS_LOCAL}/scripts"
 
-# Copy Skill definition and helper script
+# Copy Skill definition, helper script, and 3D-LUT presets
 if [ -f "${SCRIPT_DIR}/SKILL.md" ]; then
     cp "${SCRIPT_DIR}/SKILL.md" "${GEMINI_GLOBAL}/SKILL.md"
     cp "${SCRIPT_DIR}/SKILL.md" "${AGENTS_LOCAL}/SKILL.md"
     cp "${SCRIPT_DIR}/scripts/camouf_arw.py" "${GEMINI_GLOBAL}/scripts/camouf_arw.py"
     cp "${SCRIPT_DIR}/scripts/camouf_arw.py" "${AGENTS_LOCAL}/scripts/camouf_arw.py"
     chmod +x "${GEMINI_GLOBAL}/scripts/camouf_arw.py" "${AGENTS_LOCAL}/scripts/camouf_arw.py"
+
+    if [ -d "${SCRIPT_DIR}/presets" ]; then
+        mkdir -p "${GEMINI_GLOBAL}/presets" "${AGENTS_LOCAL}/presets"
+        cp -r "${SCRIPT_DIR}/presets/"* "${GEMINI_GLOBAL}/presets/" 2>/dev/null || true
+        cp -r "${SCRIPT_DIR}/presets/"* "${AGENTS_LOCAL}/presets/" 2>/dev/null || true
+    fi
 else
     echo "❌ Error: SKILL.md not found in ${SCRIPT_DIR}"
     exit 1
