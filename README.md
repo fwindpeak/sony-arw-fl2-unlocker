@@ -100,7 +100,21 @@ python3 scripts/camouf_arw.py /path/to/DSC00001.ARW
 
 # 3. 批量处理相册目录
 python3 scripts/camouf_arw.py /path/to/my_arw_folder/ -o /path/to/output_folder/
+
+# 4. 将提取的 .bin 预设转换为通用 .cube 3D-LUT (供 DaVinci / Lightroom / FCP 套用)
+python3 scripts/export_lut_cube.py presets/ -o luts/ --size 33
 ```
+
+---
+
+## 🎬 通用 3D-LUT (.cube) 跨平台套用
+
+通过 `export_lut_cube.py` 导出的标准 `.cube` 文件（已保存在 `luts/` 目录）可直接在第三方后期软件中使用：
+
+- **DaVinci Resolve (达芬奇)**：将 `luts/*.cube` 文件拷贝至 LUT 目录即可在调色节点直接调用。
+- **Adobe Photoshop / Lightroom**：在【颜色查找】或导入为 Camera Raw 增强型配置文件。
+- **Final Cut Pro / Premiere Pro**：通过自定义 LUT 插件直接套用原厂电影胶片调色。
+
 
 ---
 

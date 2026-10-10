@@ -34,9 +34,11 @@ scratch/
 *.JPEG
 *.jpeg
 
-# Keep presets tracked
+# Keep presets and LUTs tracked
 !presets/
 !presets/*.bin
+!luts/
+!luts/*.cube
 
 # Local workspace agent caches (if installed locally)
 .agents/

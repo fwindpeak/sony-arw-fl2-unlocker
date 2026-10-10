@@ -26,6 +26,12 @@ if [ -f "${SCRIPT_DIR}/SKILL.md" ]; then
     cp "${SCRIPT_DIR}/scripts/camouf_arw.py" "${AGENTS_LOCAL}/scripts/camouf_arw.py"
     chmod +x "${GEMINI_GLOBAL}/scripts/camouf_arw.py" "${AGENTS_LOCAL}/scripts/camouf_arw.py"
 
+    if [ -f "${SCRIPT_DIR}/scripts/export_lut_cube.py" ]; then
+        cp "${SCRIPT_DIR}/scripts/export_lut_cube.py" "${GEMINI_GLOBAL}/scripts/export_lut_cube.py"
+        cp "${SCRIPT_DIR}/scripts/export_lut_cube.py" "${AGENTS_LOCAL}/scripts/export_lut_cube.py"
+        chmod +x "${GEMINI_GLOBAL}/scripts/export_lut_cube.py" "${AGENTS_LOCAL}/scripts/export_lut_cube.py"
+    fi
+
     if [ -d "${SCRIPT_DIR}/presets" ]; then
         mkdir -p "${GEMINI_GLOBAL}/presets" "${AGENTS_LOCAL}/presets"
         cp -r "${SCRIPT_DIR}/presets/"* "${GEMINI_GLOBAL}/presets/" 2>/dev/null || true
