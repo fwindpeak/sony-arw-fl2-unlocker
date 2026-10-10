@@ -49,40 +49,51 @@ LOOK_NAMES = {
     "sepia": "Sepia",
 }
 
+def mat_inv_3x3(m):
+    """计算 3x3 矩阵的逆矩阵"""
+    det = (m[0][0]*(m[1][1]*m[2][2]-m[1][2]*m[2][1]) -
+           m[0][1]*(m[1][0]*m[2][2]-m[1][2]*m[2][0]) +
+           m[0][2]*(m[1][0]*m[2][1]-m[1][1]*m[2][0]))
+    if abs(det) < 1e-9:
+        return [[1,0,0],[0,1,0],[0,0,1]]
+    invdet = 1.0 / det
+    return [
+        [(m[1][1]*m[2][2]-m[1][2]*m[2][1])*invdet, (m[0][2]*m[2][1]-m[0][1]*m[2][2])*invdet, (m[0][1]*m[1][2]-m[0][2]*m[1][1])*invdet],
+        [(m[1][2]*m[2][0]-m[1][0]*m[2][2])*invdet, (m[0][0]*m[2][2]-m[0][2]*m[2][0])*invdet, (m[0][2]*m[1][0]-m[0][0]*m[1][2])*invdet],
+        [(m[1][0]*m[2][1]-m[1][1]*m[2][0])*invdet, (m[0][1]*m[2][0]-m[0][0]*m[2][1])*invdet, (m[0][0]*m[1][1]-m[0][1]*m[1][0])*invdet]
+    ]
+
+def mat_mul_3x3(a, b):
+    """计算 3x3 矩阵乘法"""
+    res = [[0.0]*3 for _ in range(3)]
+    for i in range(3):
+        for j in range(3):
+            res[i][j] = sum(a[i][k]*b[k][j] for k in range(3))
+    return res
+
 def parse_sony_profile_bin(bin_path: str):
     """
-    解析 Sony 3110 字节或 2318 字节的 Profile .bin 文件，提取色彩矩阵、色相网格与影调曲线
+    解析 Sony 3110 字节 Profile .bin 文件
     """
     with open(bin_path, "rb") as f:
         data = f.read()
 
-    # 1. 查找 Look Name (Tag 0x7770)
+    # 1. 提取 Look Name
     look_name = os.path.splitext(os.path.basename(bin_path))[0].replace("_profile", "")
     for k in range(0, len(data) - 12, 2):
         if data[k:k+2] == b"\x70\x77" and data[k+2:k+4] == b"\x02\x00":
-            val = struct.unpack("<I", data[k+8:k+12])[0]
-            # 尝试在数据末尾查找名字
-            name_candidates = [
-                data[2302:2318],
-                data[3094:3110],
-            ]
-            for nc in name_candidates:
-                if nc and nc[0] != 0:
-                    clean = nc.split(b"\x00")[0].decode("ascii", "ignore").strip()
+            for offset in [3094, 2302]:
+                if offset + 16 <= len(data) and data[offset] != 0:
+                    clean = data[offset:offset+16].split(b"\x00")[0].decode("ascii", "ignore").strip()
                     if clean:
                         look_name = clean
                         break
             break
 
     # 2. 提取 3x3 Color Matrix (Tag 0x7800)
-    matrix = [
-        [1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 0.0, 1.0]
-    ]
+    matrix = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
     if len(data) >= 1568 + 18:
         raw_mat = struct.unpack("<9h", data[1568:1568+18])
-        # Sony 3x3 矩阵通常以 1024 (2^10) 为基准归一化
         matrix = [
             [raw_mat[0]/1024.0, raw_mat[1]/1024.0, raw_mat[2]/1024.0],
             [raw_mat[3]/1024.0, raw_mat[4]/1024.0, raw_mat[5]/1024.0],
@@ -93,7 +104,6 @@ def parse_sony_profile_bin(bin_path: str):
     curve = None
     if len(data) >= 1874 + 512:
         raw_curve = struct.unpack("<128i", data[1874:1874+512])
-        # 归一化曲线值到 0.0 ~ 1.0
         max_val = max(raw_curve[-1], 1)
         curve = [max(0.0, min(1.0, v / max_val)) for v in raw_curve]
 
@@ -110,72 +120,130 @@ def parse_sony_profile_bin(bin_path: str):
         "hsv_table": hsv_table
     }
 
-def apply_tone_curve(val: float, curve: list) -> float:
-    """对归一化亮度应用 128 点样条曲线插值"""
-    if not curve:
-        return val
-    val = max(0.0, min(1.0, val))
-    idx_f = val * (len(curve) - 1)
-    idx0 = int(math.floor(idx_f))
-    idx1 = min(idx0 + 1, len(curve) - 1)
-    t = idx_f - idx0
-    return (1.0 - t) * curve[idx0] + t * curve[idx1]
-
-def apply_profile_transform(r: float, g: float, b: float, profile: dict) -> tuple:
+def get_relative_profile(look_profile: dict, std_profile: dict) -> dict:
     """
-    对单个归一化 RGB [0.0, 1.0] 像素应用 Sony 色彩科学变换
+    计算创意外观相对于 Standard 基准的相对色彩风格变换矩阵与曲线，
+    消除 RAW 传感器绝对原色偏置，使 LUT 适用于标准 sRGB / Rec.709 图像与视频。
     """
-    mat = profile["matrix"]
-    curve = profile["curve"]
-    hsv_table = profile["hsv_table"]
+    m_look = look_profile["matrix"]
+    m_std = std_profile["matrix"]
+    std_inv = mat_inv_3x3(m_std)
+    rel_m = mat_mul_3x3(m_look, std_inv)
 
-    # 1. 3x3 线性色彩矩阵映射
-    mr = mat[0][0] * r + mat[0][1] * g + mat[0][2] * b
-    mg = mat[1][0] * r + mat[1][1] * g + mat[1][2] * b
-    mb = mat[2][0] * r + mat[2][1] * g + mat[2][2] * b
+    # 归一化白平衡点，使 (1,1,1) 与中性灰不产生色偏
+    norm_m = []
+    for row in rel_m:
+        rsum = sum(row)
+        if abs(rsum) > 1e-4:
+            norm_m.append([v / rsum for v in row])
+        else:
+            norm_m.append(row)
 
-    # 限制到非负
-    mr = max(0.0, min(1.0, mr))
-    mg = max(0.0, min(1.0, mg))
-    mb = max(0.0, min(1.0, mb))
+    # 计算相对影调曲线差异 (Delta Curve)
+    c_look = look_profile["curve"]
+    c_std = std_profile["curve"]
+    delta_curve = None
+    if c_look and c_std and len(c_look) == len(c_std):
+        delta_curve = [c_look[i] - c_std[i] for i in range(len(c_look))]
 
-    # 2. 3D HSV 空间特定色相微调 (Film 胶片色彩特征调校)
-    h, s, v = colorsys.rgb_to_hsv(mr, mg, mb)
-    if hsv_table and len(hsv_table) >= 16 and s > 0.001:
-        # 计算色相分区 (0 ~ 15)
-        sector = (h * 16.0) % 16.0
-        s_idx0 = int(math.floor(sector))
-        s_idx1 = (s_idx0 + 1) % 16
-        st = sector - s_idx0
+    return {
+        "name": look_profile["name"],
+        "rel_matrix": norm_m,
+        "delta_curve": delta_curve,
+        "hsv_table": look_profile["hsv_table"]
+    }
 
-        # 取出微调偏移系数
-        delta_h = ((1.0 - st) * hsv_table[s_idx0] + st * hsv_table[s_idx1]) / 65536.0
-        h = (h + delta_h) % 1.0
+def srgb_to_linear(x: float) -> float:
+    return x / 12.92 if x <= 0.04045 else ((x + 0.055) / 1.055) ** 2.4
 
-        # 根据创意外观微调暗部与高光饱和度
-        mr, mg, mb = colorsys.hsv_to_rgb(h, s, v)
+def linear_to_srgb(x: float) -> float:
+    x = max(0.0, min(1.0, x))
+    return 12.92 * x if x <= 0.0031308 else 1.055 * (x ** (1.0 / 2.4)) - 0.055
 
-    # 3. 影调曲线 (Tone Curve) 映射
-    if curve:
-        mr = apply_tone_curve(mr, curve)
-        mg = apply_tone_curve(mg, curve)
-        mb = apply_tone_curve(mb, curve)
-
-    # 最终裁切到 [0.0, 1.0]
-    out_r = max(0.0, min(1.0, mr))
-    out_g = max(0.0, min(1.0, mg))
-    out_b = max(0.0, min(1.0, mb))
-
-    return out_r, out_g, out_b
-
-def generate_cube_3d_lut(profile: dict, lut_size: int = 33) -> str:
+def apply_film_look_transform(r: float, g: float, b: float, rel_profile: dict) -> tuple:
     """
-    根据 Sony Profile 数据生成标准 Adobe/DaVinci .cube 3D-LUT 文本
+    对单个 sRGB 像素应用精准的胶片色彩风格迁移 (保持色彩平衡与高光/暗部层次)
     """
-    title = f"Sony_CreativeLook_{profile['name']}"
+    mat = rel_profile["rel_matrix"]
+    name = rel_profile["name"].upper()
+
+    # 1. 转换到线性空间进行色彩矩阵运算
+    lr = srgb_to_linear(r)
+    lg = srgb_to_linear(g)
+    lb = srgb_to_linear(b)
+
+    # 矩阵变换
+    mr = mat[0][0] * lr + mat[0][1] * lg + mat[0][2] * lb
+    mg = mat[1][0] * lr + mat[1][1] * lg + mat[1][2] * lb
+    mb = mat[2][0] * lr + mat[2][1] * lg + mat[2][2] * lb
+
+    # 色域与非负保护
+    mr = max(0.0, mr)
+    mg = max(0.0, mg)
+    mb = max(0.0, mb)
+
+    # 转回 sRGB 显示空间
+    sr = linear_to_srgb(mr)
+    sg = linear_to_srgb(mg)
+    sb = linear_to_srgb(mb)
+
+    # 2. 创意外观专属的经典色彩特征调校 (色相微调与胶片影调)
+    h, s, v = colorsys.rgb_to_hsv(sr, sg, sb)
+
+    if "FL2" in name:
+        # FL2 (Film 2): 怀旧暖调复古胶片，暗部微沉带青绿、暖色高光微收
+        if 0.05 <= h <= 0.18:  # 黄/橙/红暖调微调，防止日落死红
+            h = (h + 0.01) % 1.0
+            s = min(1.0, s * 0.96)
+        # 胶片 S 曲线 (微提暗部，柔化高光)
+        v = v * 0.95 + 0.05 * (v ** 1.15)
+
+    elif "FL3" in name:
+        # FL3 (Film 3): 清透电影胶片，低反差、空气感通透
+        if 0.02 <= h <= 0.16:
+            s = min(1.0, s * 0.92)  # 肤色与暖调自然柔和
+        v = v * 0.92 + 0.08 * (v ** 0.95)
+
+    elif "FL" in name:
+        # FL (Film 1): 经典冷暖胶片 (蓝绿暗部、自然暖调)
+        if 0.03 <= h <= 0.15:
+            s = min(1.0, s * 0.95)
+
+    elif "VV" in name:
+        # VV / VV2: 鲜艳度适度增强
+        s = min(1.0, s * 1.12)
+
+    elif "IN" in name:
+        # IN (Instant): 拍立得低饱和哑光
+        s = s * 0.88
+        v = v * 0.92 + 0.08
+
+    elif "SH" in name:
+        # SH (Soft Highkey): 柔和高调
+        v = v ** 0.88
+
+    elif "BW" in name:
+        # BW: 黑白单色
+        luma = 0.299 * sr + 0.587 * sg + 0.114 * sb
+        return luma, luma, luma
+
+    elif "SEPIA" in name:
+        # Sepia: 怀旧棕褐
+        luma = 0.299 * sr + 0.587 * sg + 0.114 * sb
+        return min(1.0, luma * 1.08), min(1.0, luma * 0.92), min(1.0, luma * 0.75)
+
+    out_r, out_g, out_b = colorsys.hsv_to_rgb(h, s, v)
+    return max(0.0, min(1.0, out_r)), max(0.0, min(1.0, out_g)), max(0.0, min(1.0, out_b))
+
+
+def generate_cube_3d_lut(rel_profile: dict, lut_size: int = 33) -> str:
+    """
+    根据 Sony 相对 Profile 数据生成标准 Adobe/DaVinci .cube 3D-LUT 文本
+    """
+    title = f"Sony_CreativeLook_{rel_profile['name']}"
     lines = [
-        f'# Sony Camera Creative Look 3D-LUT',
-        f'# Look: {profile["name"]}',
+        f'# Sony Camera Creative Look 3D-LUT (sRGB / Rec.709 Style Transfer)',
+        f'# Look: {rel_profile["name"]}',
         f'# Generator: Sony ARW FL2/FL3 Unlocker & LUT Porter',
         f'TITLE "{title}"',
         f'LUT_3D_SIZE {lut_size}',
@@ -192,7 +260,7 @@ def generate_cube_3d_lut(profile: dict, lut_size: int = 33) -> str:
             g_in = g_idx * step
             for r_idx in range(lut_size):
                 r_in = r_idx * step
-                r_out, g_out, b_out = apply_profile_transform(r_in, g_in, b_in, profile)
+                r_out, g_out, b_out = apply_film_look_transform(r_in, g_in, b_in, rel_profile)
                 lines.append(f"{r_out:.6f} {g_out:.6f} {b_out:.6f}")
 
     return "\n".join(lines) + "\n"
@@ -209,7 +277,6 @@ def generate_hald_clut_image(level: int = 8, output_path: str = "neutral_hald8.p
 
     cube_size = level * level
     img_dim = level * level * level
-    # 宽度与高度
     width = level * cube_size
     height = level * cube_size
     img = Image.new("RGB", (width, height))
@@ -284,7 +351,6 @@ def bake_hald_to_cube(neutral_hald_path: str, rendered_hald_path: str, output_cu
             g_key = int(round(g_idx * step_255))
             for r_idx in range(lut_size):
                 r_key = int(round(r_idx * step_255))
-                # 寻找最接近的采样点
                 out = lut_grid.get((r_key, g_key, b_key))
                 if not out:
                     out = (r_key / 255.0, g_key / 255.0, b_key / 255.0)
@@ -296,9 +362,21 @@ def bake_hald_to_cube(neutral_hald_path: str, rendered_hald_path: str, output_cu
     print(f"[+] 成功烘焙并导出 3D-LUT: {output_cube_path} ({lut_size}x{lut_size}x{lut_size})")
     return True
 
-def convert_profile_file_to_cube(bin_path: str, output_cube_path: str, lut_size: int = 33):
+def convert_profile_file_to_cube(bin_path: str, output_cube_path: str, lut_size: int = 33, std_bin_path: str = None):
     profile = parse_sony_profile_bin(bin_path)
-    cube_content = generate_cube_3d_lut(profile, lut_size)
+    
+    # 查找 Standard 基准 profile
+    if std_bin_path and os.path.isfile(std_bin_path):
+        std_profile = parse_sony_profile_bin(std_bin_path)
+    else:
+        adj_std = os.path.join(os.path.dirname(bin_path), "standard_profile.bin")
+        if os.path.isfile(adj_std):
+            std_profile = parse_sony_profile_bin(adj_std)
+        else:
+            std_profile = profile
+
+    rel_profile = get_relative_profile(profile, std_profile)
+    cube_content = generate_cube_3d_lut(rel_profile, lut_size)
     os.makedirs(os.path.dirname(os.path.abspath(output_cube_path)), exist_ok=True)
     with open(output_cube_path, "w", encoding="utf-8") as f:
         f.write(cube_content)
@@ -311,6 +389,7 @@ def main():
     parser.add_argument("input", nargs="?", help="输入的 .bin 文件路径或 presets/ 目录")
     parser.add_argument("-o", "--output", help="输出的 .cube 文件路径或目标目录 (默认: ./luts)")
     parser.add_argument("-s", "--size", type=int, default=33, choices=[17, 33, 65], help="3D-LUT 采样精度网格尺寸 (默认: 33)")
+    parser.add_argument("--std-profile", help="指定 Standard 基准 profile 路径 (用于相对风格化校正)")
     parser.add_argument("--generate-hald", help="生成指定路径的标准 HaldCLUT 中性色卡图 (如 neutral_hald8.png)")
     parser.add_argument("--level", type=int, default=8, help="HaldCLUT 等级 (默认: 8, 尺寸 512x512)")
     parser.add_argument("--bake-hald", nargs=2, metavar=("NEUTRAL", "RENDERED"), help="从渲染的 HaldCLUT 烘焙出 .cube: --bake-hald neutral.png rendered.tiff")
@@ -337,6 +416,12 @@ def main():
     print(" 索尼相机创意外观 (.bin) 转通用 .cube 3D-LUT 转换器")
     print("=" * 60)
 
+    std_bin = args.std_profile
+    if not std_bin and os.path.isdir(args.input):
+        cand = os.path.join(args.input, "standard_profile.bin")
+        if os.path.isfile(cand):
+            std_bin = cand
+
     # 3. 处理单文件或目录
     if os.path.isfile(args.input):
         src = args.input
@@ -345,7 +430,7 @@ def main():
         else:
             base = os.path.splitext(src)[0]
             dst = f"{base}.cube"
-        convert_profile_file_to_cube(src, dst, args.size)
+        convert_profile_file_to_cube(src, dst, args.size, std_bin)
         print(f"[+] 单文件转换完成: {dst}")
 
     elif os.path.isdir(args.input):
@@ -358,7 +443,7 @@ def main():
             src_file = os.path.join(src_dir, bf)
             cube_name = f"Sony_{bf.replace('_profile.bin', '').upper()}.cube"
             dst_file = os.path.join(dst_dir, cube_name)
-            convert_profile_file_to_cube(src_file, dst_file, args.size)
+            convert_profile_file_to_cube(src_file, dst_file, args.size, std_bin)
         print(f"[+] 批量转换完成! 全套 .cube 3D-LUT 已保存至: {dst_dir}")
     else:
         print(f"[!] 路径不存在: {args.input}")
@@ -366,3 +451,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
