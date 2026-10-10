@@ -1,0 +1,43 @@
+# Operating System Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Sony RAW Photos and Test Files (Avoid committing large RAW binaries)
+temp-files/
+*.ARW
+*.arw
+*.SRF
+*.srf
+*.SR2
+*.sr2
+*.JPG
+*.jpg
+*.JPEG
+*.jpeg
+unlocked_fl2/
+spoofed_*/
+*_fl2_unlocked.ARW
+*_fl2_unlocked.arw
+*_a7m5*.ARW
+*_a7m5*.arw
+*_a1m2*.ARW
+*_a1m2*.arw
+
+# Temporary & Log files
+*.log
+scratch/
