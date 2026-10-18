@@ -128,19 +128,22 @@ python install_skill.py
 > **提示**：Windows 下运行 `python`，macOS / Linux 下运行 `python3` 或 `python`。
 
 ```bash
-# 1. 检测与验证 ARW 文件的机型标定与创意外观槽位 (零外部依赖)
+# 1. 检测与验证 ARW 文件的机型标定与创意外观槽位 (零外部依赖，自动检测通透平衡版/原厂版)
 python scripts/camouf_arw.py inspect /path/to/photo.ARW
 
-# 2. 单张照片注入解锁 (默认 FL2 为激活外观)
+# 2. 单张照片注入解锁 (默认已启用通透平衡版 -m balanced，白底纯净不发黄)
 python scripts/camouf_arw.py /path/to/DSC00001.ARW
 
-# 3. 批量处理整个相册目录
+# 3. 如需使用原厂未经校准的极暖浓郁矩阵 (适合室外大阳光场景):
+python scripts/camouf_arw.py /path/to/DSC00001.ARW -m factory
+
+# 4. 批量处理整个相册目录
 python scripts/camouf_arw.py /path/to/my_arw_folder/ -o /path/to/output_folder/
 
-# 4. 从新机型 (如 A1M2 / A7M5) 样张中提取官方原始 3D-LUT 数据块
+# 5. 从新机型 (如 A1M2 / A7M5) 样张中提取官方原始 3D-LUT 数据块
 python scripts/camouf_arw.py extract sample_new_camera.ARW
 
-# 5. 将提取的 .bin 预设转换为通用 .cube 3D-LUT (供 DaVinci / Lightroom / FCP 套用)
+# 6. 将预设转换为通用 .cube 3D-LUT (供 DaVinci / Lightroom / FCP 套用)
 python scripts/export_lut_cube.py presets/ -o luts/ --size 33
 ```
 

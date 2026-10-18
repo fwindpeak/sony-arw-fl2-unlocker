@@ -214,7 +214,7 @@ def inspect_arw(arw_path: str):
             block = sr2_dec[p : p + BLOCK_SIZE]
             name_raw = block[3094:3110].split(b"\x00")[0]
             name = name_raw.decode("ascii", "ignore").strip()
-            slots.append((slot_idx, p, name))
+            slots.append((slot_idx, p, name, block))
             slot_idx += 1
             p += BLOCK_SIZE
             continue
@@ -223,14 +223,20 @@ def inspect_arw(arw_path: str):
     print(f" 检测到 {len(slots)} 个 Creative Look 槽位:")
     has_fl2 = False
     has_fl3 = False
-    for idx, slot_offset, name in slots:
+    for idx, slot_offset, name, block in slots:
         status_note = ""
         if name == "FL2":
             has_fl2 = True
-            status_note = "⚡ [已解锁] 真实 FL2 3D-LUT 已注入 (原 BW 槽位)"
+            mat_b = struct.unpack("<h", block[1580:1582])[0]
+            is_bal = abs(mat_b - (-80)) < 25
+            style_str = "通透平衡版 (推荐 · 修正偏黄白底)" if is_bal else "原厂浓郁极暖版 (原始矩阵)"
+            status_note = f"⚡ [已解锁] FL2 · {style_str} (原 BW 槽位)"
         elif name == "FL3":
             has_fl3 = True
-            status_note = "⚡ [已解锁] 真实 FL3 3D-LUT 已注入 (原 Sepia 槽位)"
+            mat_b = struct.unpack("<h", block[1580:1582])[0]
+            is_bal = abs(mat_b - (-33)) < 25
+            style_str = "通透平衡版 (推荐 · 修正偏黄白底)" if is_bal else "原厂浓郁极暖版 (原始矩阵)"
+            status_note = f"⚡ [已解锁] FL3 · {style_str} (原 Sepia 槽位)"
         elif name == "BW":
             status_note = "原厂保留 (单色黑白)"
         elif name == "Sepia":
@@ -404,6 +410,12 @@ def main():
     parser.add_argument("input", nargs="?", help="输入的 ARW 文件或照片目录")
     parser.add_argument("-o", "--output", help="输出文件或输出目录")
     parser.add_argument(
+        "-m", "--mode",
+        default="balanced",
+        choices=["balanced", "factory"],
+        help="色彩调校风格: balanced (通透平衡版 · 推荐，白底纯净不发黄、人像肤色通透), factory (原厂浓郁极暖版)"
+    )
+    parser.add_argument(
         "-t", "--target",
         default="a7c2",
         choices=list(TARGET_MODELS.keys()),
@@ -465,8 +477,19 @@ def main():
                 return cand
         return None
 
-    fl2_bin = args.fl2_profile or find_preset_file("fl2_profile.bin")
-    fl3_bin = args.fl3_profile or find_preset_file("fl3_profile.bin")
+    if args.mode == "balanced":
+        fl2_cand = find_preset_file("fl2_balanced.bin") or find_preset_file("fl2_profile.bin")
+        fl3_cand = find_preset_file("fl3_balanced.bin") or find_preset_file("fl3_profile.bin")
+        mode_desc = "通透平衡版 (Balanced · 推荐 · 修正偏黄，白底通透干净)"
+    else:
+        fl2_cand = find_preset_file("fl2_profile.bin")
+        fl3_cand = find_preset_file("fl3_profile.bin")
+        mode_desc = "原厂浓郁极暖版 (Factory · 原始提取矩阵)"
+
+    fl2_bin = args.fl2_profile or fl2_cand
+    fl3_bin = args.fl3_profile or fl3_cand
+
+    print(f"[*] 选定调校风格: {mode_desc}")
 
     if os.path.isfile(args.input):
         src = args.input

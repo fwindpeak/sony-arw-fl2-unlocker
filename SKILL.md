@@ -62,13 +62,19 @@ python scripts/camouf_arw.py /path/to/raw_folder/ -o /path/to/output_folder/
 ```
 
 ### Step 2: Choose Presets & Look Modes
-- **Default (Recommended)**: Unlocks all looks (`FL, FL2, FL3, VV2, IN, SH, ST, PT, NT, VV`) with `FL2` as default active look:
+- **Default (Balanced · Option 2 · Highly Recommended)**:
+  Unlocks all looks with white-preserving balanced FL2/FL3 matrix (prevents yellow cast on white objects and indoor portraits):
   ```bash
-  python scripts/camouf_arw.py /path/to/photo.ARW -l fl2
+  python scripts/camouf_arw.py /path/to/photo.ARW -m balanced -l fl2
+  ```
+- **Factory Original Matrix (Extremely Warm Old Film)**:
+  Directly injects native extracted profile matrix without dynamic white re-balancing (suitable for outdoor sunny days):
+  ```bash
+  python scripts/camouf_arw.py /path/to/photo.ARW -m factory -l fl2
   ```
 - **Film 3 Default**:
   ```bash
-  python scripts/camouf_arw.py /path/to/photo.ARW -l fl3
+  python scripts/camouf_arw.py /path/to/photo.ARW -m balanced -l fl3
   ```
 
 ### Step 3: Verify Output Files (Zero External Dependency)
@@ -80,8 +86,8 @@ python scripts/camouf_arw.py inspect /path/to/output_photo.ARW
 ```
 Expected output includes:
 ```text
-[Slot  9] FL2          : ⚡ [已解锁] 真实 FL2 3D-LUT 已注入 (原 BW 槽位)
-[Slot 10] FL3          : ⚡ [已解锁] 真实 FL3 3D-LUT 已注入 (原 Sepia 槽位)
+[Slot  9] FL2          : ⚡ [已解锁] FL2 · 通透平衡版 (推荐 · 修正偏黄白底) (原 BW 槽位)
+[Slot 10] FL3          : ⚡ [已解锁] FL3 · 通透平衡版 (推荐 · 修正偏黄白底) (原 Sepia 槽位)
 [+] 状态: 验证通过！FL2 和 FL3 全套新创意外观已成功注入。
 ```
 

@@ -25,7 +25,8 @@ import {
   inspectArw,
   processArw,
   ALL_CREATIVE_LOOKS,
-  TARGET_MODELS
+  TARGET_MODELS,
+  PROFILE_MODES
 } from './core/camoufArw';
 import './App.css';
 
@@ -33,6 +34,7 @@ export default function App() {
   const [files, setFiles] = useState([]);
   const [targetModel, setTargetModel] = useState('a7c2');
   const [defaultLook, setDefaultLook] = useState('keep');
+  const [profileMode, setProfileMode] = useState('balanced');
   const [isProcessingAll, setIsProcessingAll] = useState(false);
   const [inspectTarget, setInspectTarget] = useState(null);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -108,6 +110,7 @@ export default function App() {
       const outputUint8 = processArw(fullBuffer, {
         targetModel,
         defaultLook,
+        profileMode,
       });
 
       // 验证处理后的成果
@@ -324,6 +327,20 @@ export default function App() {
               <option value="pt">Portrait - 人像肤色</option>
             </select>
           </div>
+
+          <div className="config-item">
+            <label className="config-label">
+              <Sparkles size={14} /> 色彩风格调校
+            </label>
+            <select
+              className="select-custom"
+              value={profileMode}
+              onChange={(e) => setProfileMode(e.target.value)}
+            >
+              <option value="balanced">✨ 通透平衡版 (推荐 · 修正偏黄白底，人像纯净通透)</option>
+              <option value="factory">🏛️ 原厂浓郁极暖版 (原始未校准矩阵 · 室内易偏黄)</option>
+            </select>
+          </div>
         </div>
 
         <div className="config-group">
@@ -347,11 +364,19 @@ export default function App() {
         </div>
       </div>
 
-      {/* 色彩美学温馨提示 */}
+      {/* 色彩美学说明提示 */}
       <div className="tip-banner">
         <SunMedium size={20} className="tip-banner-icon" />
         <div>
-          <strong>摄影师调色指南</strong>：官方真实 FL2（怀旧胶片）在底层色彩矩阵中大幅压低了蓝色通道，呈现浓郁温暖的复古旧胶片质感。如果在 Sony Edit 打开时觉得画面偏黄，建议在右侧面板将<strong>色温微降 300~500K</strong>，<strong>色调微调 +3（洋红）</strong>，即可立刻获得清爽通透的高级日系人像胶片色！
+          {profileMode === 'balanced' ? (
+            <>
+              <strong>调色说明 · 已启用「通透平衡版 (方案2 · 推荐)」</strong>：针对官方原生 FL2/FL3 矩阵移植至其他相机后容易在<strong>室内人像/白色地垫/白墙发黄发泥</strong>的问题，已通过白平衡重归一化色彩矩阵精准平衡。画面白底清爽干净、人像肤色通透健康，同时 100% 完整保留 FL2 胶片颗粒感调性与 FL3 电影清透曲线与暗部反差！
+            </>
+          ) : (
+            <>
+              <strong>调色说明 · 已启用「原厂浓郁极暖版」</strong>：直接注入官方未校准的原始矩阵提取块，大幅压低蓝色通道，呈现极暖浓郁旧胶片质感。适合室外大阳光场景；如果在室内拍摄觉得画面偏黄，建议在 Sony Edit 将<strong>色温微降 300~500K</strong>，<strong>色调微调 +3（洋红）</strong>。
+            </>
+          )}
         </div>
       </div>
 
