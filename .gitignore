@@ -42,3 +42,8 @@ scratch/
 
 # Local workspace agent caches (if installed locally)
 .agents/
+
+# Web Frontend artifacts
+web/node_modules/
+web/dist/
+

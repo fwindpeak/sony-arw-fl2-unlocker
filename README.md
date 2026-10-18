@@ -71,6 +71,27 @@ python install_skill.py
 
 ---
 
+## 🌐 纯前端网页版 (Browser Web App · 零上传免安装)
+
+如果你不想在命令行运行脚本，可以直接使用全新的 **React 纯前端可视化网页版**：
+
+- **100% 浏览器本地运算**：依托浏览器的 `File API` 与原生内存加密解密，处理一张照片仅需 **约 20 毫秒**，文件**绝不上传服务器**，隐私绝对安全；
+- **拖拽批量处理 & ZIP 打包**：支持拖入多张 `.ARW` 照片，一键全部解锁并打包为 `.zip` 下载；
+- **可视化槽位结构检测**：可在网页上直观查看相机机型、当前拍摄外观与全部 10 个色彩槽位的注入状态。
+
+### 🚀 启动网页版
+- **Windows 用户**：直接双击运行 [`start-web.bat`](file:///c:/Users/wind/code/myprojects/sony-arw-fl2-unlocker/start-web.bat)（或在 PowerShell 中执行 `.\start-web.ps1`）；
+- **macOS / Linux 用户**：运行 `./start-web.sh`；
+- **命令行启动**：
+  ```bash
+  cd web
+  npm install
+  npm run dev
+  ```
+启动后在浏览器打开 `http://localhost:5173` 即可开始使用！
+
+---
+
 ## 💬 Agent 自然语言调用示例
 
 ```text
