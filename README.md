@@ -48,12 +48,25 @@ python3 scripts/camouf_arw.py /path/to/a7c2_photos/ -o /path/to/output/
 
 ## ⚡ 一键安装 Agent Skill
 
-在终端中运行一键安装脚本（自动配置到全局与当前工程的 Agent 目录）：
+本项目全面支持 **Windows**、**macOS** 与 **Linux**。在终端中根据系统选择对应的一键安装方式（自动配置到全局与当前工程的 Agent 目录）：
 
+### 🪟 Windows 系统 (推荐 PowerShell)
+在 PowerShell 中运行：
+```powershell
+.\install-skill.ps1
+```
+*或双击运行 `install-skill.bat`，或在 CMD 中执行 `python install_skill.py`。*
+
+### 🍎 macOS / 🐧 Linux 系统
+在终端中运行：
 ```bash
-git clone https://github.com/your-username/sony-arw-fl2-unlocker.git
-cd sony-arw-fl2-unlocker
+chmod +x ./install-skill.sh
 ./install-skill.sh
+```
+
+### 🌐 任意平台通用 Python 安装命令
+```bash
+python install_skill.py
 ```
 
 ---
@@ -89,20 +102,25 @@ cd sony-arw-fl2-unlocker
 
 ---
 
-## 💻 手动命令行调用
+## 💻 手动命令行调用 (Windows & macOS 通用)
+
+> **提示**：Windows 下运行 `python`，macOS / Linux 下运行 `python3` 或 `python`。
 
 ```bash
-# 1. 提取新机型 3D-LUT 数据
-python3 scripts/camouf_arw.py extract sample_new_camera.ARW
+# 1. 检测与验证 ARW 文件的机型标定与创意外观槽位 (零外部依赖)
+python scripts/camouf_arw.py inspect /path/to/photo.ARW
 
-# 2. 单张注入处理
-python3 scripts/camouf_arw.py /path/to/DSC00001.ARW
+# 2. 单张照片注入解锁 (默认 FL2 为激活外观)
+python scripts/camouf_arw.py /path/to/DSC00001.ARW
 
-# 3. 批量处理相册目录
-python3 scripts/camouf_arw.py /path/to/my_arw_folder/ -o /path/to/output_folder/
+# 3. 批量处理整个相册目录
+python scripts/camouf_arw.py /path/to/my_arw_folder/ -o /path/to/output_folder/
 
-# 4. 将提取的 .bin 预设转换为通用 .cube 3D-LUT (供 DaVinci / Lightroom / FCP 套用)
-python3 scripts/export_lut_cube.py presets/ -o luts/ --size 33
+# 4. 从新机型 (如 A1M2 / A7M5) 样张中提取官方原始 3D-LUT 数据块
+python scripts/camouf_arw.py extract sample_new_camera.ARW
+
+# 5. 将提取的 .bin 预设转换为通用 .cube 3D-LUT (供 DaVinci / Lightroom / FCP 套用)
+python scripts/export_lut_cube.py presets/ -o luts/ --size 33
 ```
 
 ---

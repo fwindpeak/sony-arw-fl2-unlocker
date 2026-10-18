@@ -30,6 +30,16 @@ import struct
 import math
 import colorsys
 
+# Windows 终端控制台输出 UTF-8 兼容支持（避免 GBK 乱码及 Unicode 编码崩溃）
+if sys.platform == "win32":
+    try:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 LOOK_NAMES = {
     "st": "Standard",
     "standard": "Standard",

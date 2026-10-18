@@ -24,12 +24,12 @@ if [ -f "${SCRIPT_DIR}/SKILL.md" ]; then
     cp "${SCRIPT_DIR}/SKILL.md" "${AGENTS_LOCAL}/SKILL.md"
     cp "${SCRIPT_DIR}/scripts/camouf_arw.py" "${GEMINI_GLOBAL}/scripts/camouf_arw.py"
     cp "${SCRIPT_DIR}/scripts/camouf_arw.py" "${AGENTS_LOCAL}/scripts/camouf_arw.py"
-    chmod +x "${GEMINI_GLOBAL}/scripts/camouf_arw.py" "${AGENTS_LOCAL}/scripts/camouf_arw.py"
+    chmod +x "${GEMINI_GLOBAL}/scripts/camouf_arw.py" "${AGENTS_LOCAL}/scripts/camouf_arw.py" 2>/dev/null || true
 
     if [ -f "${SCRIPT_DIR}/scripts/export_lut_cube.py" ]; then
         cp "${SCRIPT_DIR}/scripts/export_lut_cube.py" "${GEMINI_GLOBAL}/scripts/export_lut_cube.py"
         cp "${SCRIPT_DIR}/scripts/export_lut_cube.py" "${AGENTS_LOCAL}/scripts/export_lut_cube.py"
-        chmod +x "${GEMINI_GLOBAL}/scripts/export_lut_cube.py" "${AGENTS_LOCAL}/scripts/export_lut_cube.py"
+        chmod +x "${GEMINI_GLOBAL}/scripts/export_lut_cube.py" "${AGENTS_LOCAL}/scripts/export_lut_cube.py" 2>/dev/null || true
     fi
 
     if [ -d "${SCRIPT_DIR}/presets" ]; then

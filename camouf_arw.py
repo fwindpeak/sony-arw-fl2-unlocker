@@ -2,17 +2,19 @@
 """
 Sony ARW Creative Look Full Suite Injector & Profile Porter
 ===========================================================
-索尼全套新创意外观（Creative Look）真 3D-LUT 提取与全机型移植工具
+索尼全套新创意外观（Creative Look）真 3D-LUT 提取、移植与全机型解锁工具
 
 工作原理：
 1. 【Profile 提取 (Extract)】：
    从搭载了原生 FL2 / FL3 的新相机（如 A1 II、A7 V 等）拍摄的 sample.ARW 中，
    自动解密并提取出官方原汁原味的 3110 字节 FL2 与 FL3 真实 3D-LUT 核心数据块（.bin 文件）；
 2. 【Profile 注入 (Inject)】：
-   将提取出的官方 FL2 / FL3 数据块精准注入到 A7C2 / A7M4 / A7R5 等老相机的 ARW 中，
+   将提取出的官方 FL2 / FL3 数据块精准注入到 A7C2 / A7M4 / A7R5 等相机的 ARW 中，
    替换掉极少用到的单色 BW / Sepia 槽位；
-3. 【渲染效果】：
-   Sony Edit.app 打开 A7C2 照片时，将调用真实的官方 FL2 / FL3 胶片色彩矩阵，
+3. 【元数据检测 (Inspect)】：
+   零外部依赖解析 ARW 文件，验证机型标定、SR2SubIFD 加密块及已注入的创意外观槽位；
+4. 【渲染效果】：
+   Sony Edit.app 打开照片时，将调用真实的官方 FL2 / FL3 胶片色彩矩阵，
    实现 100% 原厂调色的跨代完美移植！
 """
 
@@ -21,6 +23,16 @@ import os
 import argparse
 import re
 import struct
+
+# Windows 终端控制台输出 UTF-8 兼容支持（避免 GBK 乱码及 Unicode 编码崩溃）
+if sys.platform == "win32":
+    try:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 ALL_CREATIVE_LOOKS = {
     "st":  {"name": b"Standard",       "desc": "标准"},
@@ -39,6 +51,7 @@ ALL_CREATIVE_LOOKS = {
 
 TARGET_MODELS = {
     "a7c2": b"ILCE-7CM2",
+    "a7m4": b"ILCE-7M4\x00",
     "a7m5": b"ILCE-7M5\x00",
     "a1m2": b"ILCE-1M2\x00",
     "a9m3": b"ILCE-9M3\x00",
@@ -130,12 +143,121 @@ def extract_look_profiles(sample_arw_path: str, output_dir: str):
 
     print(f"[+] 提取完成，共导出 {extracted_count} 个完整 3D-LUT 数据块至 {output_dir}")
 
+def inspect_arw(arw_path: str):
+    """
+    检查并解析 Sony ARW 文件的机型标定、SR2SubIFD 加密块及已激活/可用的 Creative Look 槽位。
+    纯 Python 零依赖实现，跨平台支持 Windows / macOS / Linux，无需安装 ExifTool 或 grep。
+    """
+    if not os.path.isfile(arw_path):
+        print(f"[!] 错误: 文件不存在: {arw_path}")
+        return False
+
+    file_size_mb = os.path.getsize(arw_path) / (1024 * 1024)
+
+    with open(arw_path, "rb") as f:
+        header = f.read(256 * 1024)
+        f.seek(0)
+        raw = bytearray(f.read())
+
+    # 检查 TIFF / ARW 文件头
+    if not (header.startswith(b"II*\x00") or header.startswith(b"MM\x00*")):
+        print(f"[!] 警告: {arw_path} 文件头不是标准 TIFF/ARW 格式")
+
+    # 识别相机机型
+    model = "未知"
+    for m in [b"ILCE-7CM2", b"ILCE-7M4", b"ILCE-7RM5", b"ILCE-7M5", b"ILCE-1M2", b"ILCE-9M3", b"ILCE-7SM3", b"ILCE-6700"]:
+        if m in raw:
+            model = m.split(b"\x00")[0].decode("ascii", "ignore")
+            break
+    if model == "未知":
+        match = re.search(rb"ILCE-[0-9A-Za-z]+", raw[:0x20000])
+        if match:
+            model = match.group(0).decode("ascii", "ignore")
+
+    # 检查当前默认激活外观 (Active Look)
+    active_look = "未知"
+    styles = [b"FL2", b"FL3", b"Standard", b"Vivid", b"Neutral", b"Portrait", b"FL", b"VV2", b"IN", b"SH", b"BW", b"Sepia"]
+    for s in styles:
+        pos = raw.find(s + b"\x00")
+        if pos != -1 and pos < 0x20000:
+            active_look = s.decode("ascii")
+            break
+
+    # 解析 SR2SubIFD
+    offset, length, key = find_sr2_subifd(raw)
+    sr2_found = (0 < offset < len(raw) and 0 < length <= len(raw) - offset)
+
+    print("=" * 65)
+    print(" 索尼 ARW 创意外观 (Creative Look) 结构检测报告")
+    print("=" * 65)
+    print(f" 文件路径: {os.path.abspath(arw_path)}")
+    print(f" 文件大小: {file_size_mb:.2f} MB")
+    print(f" 相机机型: {model}")
+    print(f" 默认激活外观 (Active Look): {active_look}")
+    print(f" SR2SubIFD 加密块: 偏移量={offset}, 长度={length} 字节 ({'正常' if sr2_found else '未检测到'})")
+    print("-" * 65)
+
+    if not sr2_found:
+        print("[!] 未能定位 SR2SubIFD，该文件可能不是 Sony RAW (ARW) 文件")
+        print("=" * 65)
+        return False
+
+    sr2_enc = bytes(raw[offset:offset+length])
+    sr2_dec = sony_sr2_crypt(sr2_enc, key)
+
+    slots = []
+    p = 0
+    slot_idx = 1
+    while p < len(sr2_dec) - 4:
+        num_tags = struct.unpack("<H", sr2_dec[p:p+2])[0]
+        if num_tags == 114 and p + BLOCK_SIZE <= len(sr2_dec):
+            block = sr2_dec[p : p + BLOCK_SIZE]
+            name_raw = block[3094:3110].split(b"\x00")[0]
+            name = name_raw.decode("ascii", "ignore").strip()
+            slots.append((slot_idx, p, name))
+            slot_idx += 1
+            p += BLOCK_SIZE
+            continue
+        p += 2
+
+    print(f" 检测到 {len(slots)} 个 Creative Look 槽位:")
+    has_fl2 = False
+    has_fl3 = False
+    for idx, slot_offset, name in slots:
+        status_note = ""
+        if name == "FL2":
+            has_fl2 = True
+            status_note = "⚡ [已解锁] 真实 FL2 3D-LUT 已注入 (原 BW 槽位)"
+        elif name == "FL3":
+            has_fl3 = True
+            status_note = "⚡ [已解锁] 真实 FL3 3D-LUT 已注入 (原 Sepia 槽位)"
+        elif name == "BW":
+            status_note = "原厂保留 (单色黑白)"
+        elif name == "Sepia":
+            status_note = "原厂保留 (怀旧褐色)"
+        else:
+            status_note = "原厂保留"
+        print(f"   [Slot {idx:2d}] {name:12s} (偏移量 {slot_offset:5d}): {status_note}")
+
+    print("-" * 65)
+    if has_fl2 and has_fl3:
+        print("[+] 状态: 验证通过！FL2 和 FL3 全套新创意外观已成功注入。")
+        print("[+] 可直接在 Sony Imaging Edge Desktop (Edit) 中加载渲染。")
+    elif has_fl2:
+        print("[+] 状态: 验证通过！FL2 创意外观已成功注入。")
+    elif has_fl3:
+        print("[+] 状态: 验证通过！FL3 创意外观已成功注入。")
+    else:
+        print("[*] 提示: 该文件为原相机原始 ARW（尚未注入 FL2/FL3）。")
+        print("    运行 camouf_arw.py 即可注入解锁全套外观。")
+    print("=" * 65)
+    return True
+
 def inject_look_profile_block(sr2_buf: bytearray, sr2_offset: int, src_block: bytes, dst_start: int, new_name: bytes):
     """
     将提取出的 3110 字节完整 Look Profile 精准注入目标槽位，并重定位块内所有 30+ 处指针
     """
     block = bytearray(src_block[:BLOCK_SIZE])
-    num_tags = struct.unpack("<H", block[:2])[0]
 
     # 定位原始 block 中的 0x7770 标签推导原始基地址
     original_ifd_base = None
@@ -156,13 +278,10 @@ def inject_look_profile_block(sr2_buf: bytearray, sr2_offset: int, src_block: by
     p = 0
     while p < len(block) - 4:
         nt = struct.unpack("<H", block[p:p+2])[0]
-        if 1 <= nt <= 150:
+        if 1 <= nt <= 150 and p + 2 + nt * 12 <= len(block):
             valid = True
             for k in range(min(nt, 3)):
                 ep = p + 2 + k * 12
-                if ep + 12 > len(block):
-                    valid = False
-                    break
                 t, tt, c, v = struct.unpack("<HHII", block[ep:ep+12])
                 if tt not in [1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12] or t < 0x7000 or t > 0x8000:
                     valid = False
@@ -228,7 +347,6 @@ def unlock_all_creative_looks(raw: bytearray, default_look: str = "fl2", custom_
     sr2_reenc = sony_sr2_crypt(bytes(sr2_dec), key)
     raw[offset:offset+length] = sr2_reenc
 
-
 def process_file(src_path: str, dst_path: str, target_model: str = "a7c2", default_look: str = "fl2", fl2_bin: str = None, fl3_bin: str = None):
     with open(src_path, "rb") as f:
         raw = bytearray(f.read())
@@ -247,26 +365,43 @@ def process_file(src_path: str, dst_path: str, target_model: str = "a7c2", defau
 
     assert len(raw) == orig_len, "File size mismatch error!"
 
+    dst_dir = os.path.dirname(os.path.abspath(dst_path))
+    if dst_dir:
+        os.makedirs(dst_dir, exist_ok=True)
+
     with open(dst_path, "wb") as f:
         f.write(raw)
 
 def main():
-    if len(sys.argv) > 1 and sys.argv[1] == "extract":
-        parser_extract = argparse.ArgumentParser(description="从新机型 ARW (如 A7M5/A1M2) 中提取真实 3D-LUT 数据块")
-        parser_extract.add_argument("extract_cmd", choices=["extract"], help="extract 子命令")
-        parser_extract.add_argument("sample", help="新相机拍摄的示例 ARW 文件")
-        parser_extract.add_argument("-o", "--output", default="./presets", help="导出的 .bin 目录 (默认: ./presets)")
-        args = parser_extract.parse_args()
-        if not os.path.isfile(args.sample):
-            print(f"[!] 错误: 示例文件不存在: {args.sample}")
-            sys.exit(1)
-        extract_look_profiles(args.sample, args.output)
-        return
+    # 支持 extract 子命令与 inspect / info 子命令
+    if len(sys.argv) > 1 and sys.argv[1] in ("extract", "inspect", "info"):
+        cmd = sys.argv[1]
+        if cmd == "extract":
+            parser_extract = argparse.ArgumentParser(description="从新机型 ARW (如 A7M5/A1M2) 中提取真实 3D-LUT 数据块")
+            parser_extract.add_argument("extract_cmd", choices=["extract"], help="extract 子命令")
+            parser_extract.add_argument("sample", help="新相机拍摄的示例 ARW 文件")
+            parser_extract.add_argument("-o", "--output", default="./presets", help="导出的 .bin 目录 (默认: ./presets)")
+            args = parser_extract.parse_args()
+            if not os.path.isfile(args.sample):
+                print(f"[!] 错误: 示例文件不存在: {args.sample}")
+                sys.exit(1)
+            extract_look_profiles(args.sample, args.output)
+            return
+        elif cmd in ("inspect", "info"):
+            parser_inspect = argparse.ArgumentParser(description="检测 ARW 文件的元数据标定及创意外观注入状态 (零依赖)")
+            parser_inspect.add_argument("inspect_cmd", choices=["inspect", "info"], help="inspect / info 子命令")
+            parser_inspect.add_argument("arw_file", help="待检测的目标 ARW 文件路径")
+            args = parser_inspect.parse_args()
+            if not os.path.isfile(args.arw_file):
+                print(f"[!] 错误: 目标文件不存在: {args.arw_file}")
+                sys.exit(1)
+            inspect_arw(args.arw_file)
+            return
 
     parser = argparse.ArgumentParser(
         description="索尼 ARW 全套创意外观真 3D-LUT 提取、移植与解锁工具 (Sony ARW Look Extractor & Unlocker)"
     )
-    parser.add_argument("input", help="输入的 ARW 文件或照片目录")
+    parser.add_argument("input", nargs="?", help="输入的 ARW 文件或照片目录")
     parser.add_argument("-o", "--output", help="输出文件或输出目录")
     parser.add_argument(
         "-t", "--target",
@@ -283,11 +418,16 @@ def main():
     parser.add_argument("--fl2-profile", help="指定外部提取的真实 FL2 3D-LUT (.bin 文件)")
     parser.add_argument("--fl3-profile", help="指定外部提取的真实 FL3 3D-LUT (.bin 文件)")
     parser.add_argument("--extract", help="直接从指定的示例 ARW 文件提取 3D-LUT")
+    parser.add_argument("--inspect", "--info", dest="inspect", help="检测指定的 ARW 文件结构与外观槽位状态")
 
     args = parser.parse_args()
 
     if args.extract:
         extract_look_profiles(args.extract, "./presets")
+        return
+
+    if args.inspect:
+        inspect_arw(args.inspect)
         return
 
     if not args.input:
@@ -310,14 +450,14 @@ def main():
     print(" 10. FL3 (Film 3)   - 清透电影胶片 3 (官方 Look ID 0x17)")
     print("=" * 60)
 
-    # 自动探测 presets 目录下的外部 profile (支持各种运行路径)
+    # 自动探测 presets 目录下的外部 profile (支持各种运行路径与安装目录)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     preset_candidates = [
         os.path.join(script_dir, "presets"),
         os.path.join(os.path.dirname(script_dir), "presets"),
         os.path.abspath("./presets"),
     ]
-    
+
     def find_preset_file(filename):
         for pdir in preset_candidates:
             cand = os.path.join(pdir, filename)
@@ -331,7 +471,16 @@ def main():
     if os.path.isfile(args.input):
         src = args.input
         if args.output:
-            dst = args.output
+            if os.path.isdir(args.output) or args.output.endswith(("/", "\\")):
+                os.makedirs(args.output, exist_ok=True)
+                base_name = os.path.splitext(os.path.basename(src))[0]
+                ext = os.path.splitext(src)[1]
+                dst = os.path.join(args.output, f"{base_name}_all_looks{ext}")
+            else:
+                out_dir = os.path.dirname(args.output)
+                if out_dir:
+                    os.makedirs(out_dir, exist_ok=True)
+                dst = args.output
         else:
             base, ext = os.path.splitext(src)
             dst = f"{base}_all_looks{ext}"
