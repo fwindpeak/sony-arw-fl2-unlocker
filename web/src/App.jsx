@@ -25,7 +25,8 @@ import {
   processArw,
   ALL_CREATIVE_LOOKS,
   TARGET_MODELS,
-  PROFILE_MODES
+  PROFILE_MODES,
+  WB_OFFSETS
 } from './core/camoufArw';
 import { extractPreviewFromArw, createJpegObjectUrl } from './core/previewExtractor';
 import './App.css';
@@ -35,6 +36,7 @@ export default function App() {
   const [targetModel, setTargetModel] = useState('a7c2');
   const [defaultLook, setDefaultLook] = useState('fl2');
   const [profileMode, setProfileMode] = useState('balanced');
+  const [wbOffset, setWbOffset] = useState('-400');
   const [isProcessingAll, setIsProcessingAll] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
@@ -137,6 +139,7 @@ export default function App() {
         targetModel,
         defaultLook,
         profileMode,
+        wbOffset: Number(wbOffset),
       });
 
       const updatedInfo = inspectArw(outputUint8, item.name);
@@ -344,6 +347,20 @@ export default function App() {
             >
               <option value="balanced">✨ 通透平衡版 (推荐)</option>
               <option value="factory">🏛️ 原厂浓郁版</option>
+            </select>
+          </div>
+
+          {/* 白平衡色温优化 */}
+          <div className="select-pill">
+            <label>色温优化</label>
+            <select
+              value={wbOffset}
+              onChange={(e) => setWbOffset(e.target.value)}
+            >
+              <option value="-400">✨ 自动 -400K (去黄通透 · 推荐)</option>
+              <option value="-200">❄️ 微调 -200K (自然微冷)</option>
+              <option value="-600">🧊 强力 -600K (日系清冷)</option>
+              <option value="0">📷 保持原片色温 (0K)</option>
             </select>
           </div>
 
@@ -697,12 +714,12 @@ export default function App() {
 
             <div className="help-content">
               <div className="help-section">
-                <h4>✨ 调色方案选择</h4>
+                <h4>✨ 调色与色温优化</h4>
                 <p>
-                  <strong>通透平衡版 (推荐)</strong>：针对原生 FL2/FL3 移植到其他机型后在室内白色背景发黄发泥的问题，已通过白平衡重归一化色彩矩阵精准平衡，白底通透纯净、肤色自然，完整保留胶片高反差与暗部风格。
+                  <strong>自动 -400K 色温优化 (默认开启)</strong>：由于索尼原厂 FL2 与 FL3 胶片矩阵整体倾向偏暖，在室内拍摄容易显得偏黄、白墙发暖。工具在 RAW 层面直接对红蓝增益进行 -400K 补偿，使人像肤色通透白皙，白底纯净自然，无需在 Sony Edit 中手动拉低色温！
                 </p>
                 <p style={{ marginTop: '8px' }}>
-                  <strong>原厂浓郁版</strong>：原厂未经白平衡归一化原始矩阵，压低蓝色呈现浓郁极暖旧胶片感，适合室外阳光大场景。
+                  <strong>通透平衡版 vs 原厂浓郁版</strong>：通透平衡版重归一化了白平衡色彩矩阵，兼具胶片反差与健康肤色；原厂版则保留高暖调。
                 </p>
               </div>
 

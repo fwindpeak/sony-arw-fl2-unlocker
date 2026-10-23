@@ -52,6 +52,33 @@ export const PROFILE_MODES = {
   }
 };
 
+export const WB_OFFSETS = {
+  '-400': {
+    id: '-400',
+    kelvin: -400,
+    name: '✨ 自动 -400K (去黄通透 · 推荐)',
+    desc: '根据实测反馈，自动消除 FL2/FL3 原生偏暖胶片感，室内人像通透白皙，白墙纯净'
+  },
+  '-200': {
+    id: '-200',
+    kelvin: -200,
+    name: '❄️ 微调 -200K (自然微冷)',
+    desc: '微弱降温，使画面多一份清冷自然，避免明显冷调'
+  },
+  '-600': {
+    id: '-600',
+    kelvin: -600,
+    name: '🧊 强力 -600K (日系清冷)',
+    desc: '显著降低色温，增强青蓝空气感，适合高调与情绪大片'
+  },
+  '0': {
+    id: '0',
+    kelvin: 0,
+    name: '📷 保持原片色温 (0K)',
+    desc: '不修改照片拍摄时的原始白平衡设置'
+  }
+};
+
 export function base64ToUint8Array(base64) {
   const binaryString = typeof atob === 'function' ? atob(base64) : Buffer.from(base64, 'base64').toString('binary');
   const len = binaryString.length;
@@ -309,7 +336,68 @@ export function cloneLookSlot(sr2Buf, sr2Offset, srcStart, dstStart, newNameStr)
   injectLookProfileBlock(sr2Buf, sr2Offset, sr2Buf.slice(srcStart, srcStart + BLOCK_SIZE), dstStart, newNameStr);
 }
 
-export function unlockAllCreativeLooks(raw, defaultLook = 'fl2', profileMode = 'balanced', customFl2Bin = null, customFl3Bin = null) {
+export function applyWhitebalanceOffset(raw, sr2Dec, sr2Offset, offsetKelvin = -400) {
+  if (!offsetKelvin || Number(offsetKelvin) === 0) return 0;
+  const numK = Number(offsetKelvin);
+
+  // 黑体辐射微倒度近似：每降 100K，R 通道减少约 1.7%，B 通道增加约 1.8%
+  const step = numK / 100;
+  const factorR = Math.max(0.65, Math.min(1.45, 1.0 + step * 0.017));
+  const factorB = Math.max(0.65, Math.min(1.45, 1.0 - step * 0.018));
+
+  let modifiedCount = 0;
+
+  const adjustBuffer = (buf, baseOffset = 0) => {
+    const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    const maxSearch = buf.length - 12;
+
+    for (let p = 0; p < maxSearch; p += 2) {
+      const tag = view.getUint16(p, true);
+      const count = view.getUint32(p + 4, true);
+
+      // 0x7313 (WB_RGGBLevels) 或 0x7312 (WB_RGGBLevelsAuto)
+      if ((tag === 0x7313 || tag === 0x7312) && count === 4) {
+        const valOff = view.getUint32(p + 8, true);
+        let targetPos = null;
+
+        if (valOff + 8 <= buf.length) {
+          targetPos = valOff;
+        } else if (baseOffset > 0 && valOff >= baseOffset && (valOff - baseOffset + 8) <= buf.length) {
+          targetPos = valOff - baseOffset;
+        }
+
+        if (targetPos !== null) {
+          const r = view.getUint16(targetPos, true);
+          const g1 = view.getUint16(targetPos + 2, true);
+          const g2 = view.getUint16(targetPos + 4, true);
+          const b = view.getUint16(targetPos + 6, true);
+
+          if ((g1 === 1024 || g2 === 1024) && r > 400 && r < 9000 && b > 400 && b < 9000) {
+            const newR = Math.max(1, Math.min(8192, Math.round(r * factorR)));
+            const newB = Math.max(1, Math.min(8192, Math.round(b * factorB)));
+            view.setUint16(targetPos, newR, true);
+            view.setUint16(targetPos + 6, newB, true);
+            modifiedCount++;
+          }
+        }
+      }
+    }
+  };
+
+  adjustBuffer(sr2Dec, sr2Offset);
+  adjustBuffer(raw, 0);
+
+  return modifiedCount;
+}
+
+export function unlockAllCreativeLooks(
+  raw,
+  defaultLook = 'fl2',
+  profileMode = 'balanced',
+  customFl2Bin = null,
+  customFl3Bin = null,
+  wbOffset = -400
+) {
   const { offset, length, key } = findSr2Subifd(raw);
   const sr2Enc = raw.slice(offset, offset + length);
   const sr2Dec = sonySr2Crypt(sr2Enc, key);
@@ -332,7 +420,12 @@ export function unlockAllCreativeLooks(raw, defaultLook = 'fl2', profileMode = '
     cloneLookSlot(sr2Dec, offset, 16866, 32416, 'FL3');
   }
 
-  // 3. 设置默认载入外观 (Tag 0xb020)
+  // 3. 自动白平衡色温补偿 (根据用户反馈默认自动 -400K 修正偏暖胶片感)
+  if (wbOffset && Number(wbOffset) !== 0) {
+    applyWhitebalanceOffset(raw, sr2Dec, offset, Number(wbOffset));
+  }
+
+  // 4. 设置默认载入外观 (Tag 0xb020)
   if (defaultLook && defaultLook !== 'keep' && ALL_CREATIVE_LOOKS[defaultLook]) {
     const lookName = ALL_CREATIVE_LOOKS[defaultLook].name;
     const styles = ['Standard', 'Vivid', 'Neutral', 'Portrait', 'FL', 'VV2', 'IN', 'SH'];
@@ -378,6 +471,8 @@ export function processArw(inputData, options = {}) {
   const customFl2Bin = options.customFl2Bin || null;
   const customFl3Bin = options.customFl3Bin || null;
 
+  const wbOffset = options.wbOffset !== undefined ? options.wbOffset : -400;
+
   if (targetModel && targetModel !== 'keep' && TARGET_MODELS[targetModel] && TARGET_MODELS[targetModel].code) {
     const targetCode = TARGET_MODELS[targetModel].code;
     const targetPattern = 'ILCE-7CM2';
@@ -398,7 +493,7 @@ export function processArw(inputData, options = {}) {
     }
   }
 
-  unlockAllCreativeLooks(raw, defaultLook, profileMode, customFl2Bin, customFl3Bin);
+  unlockAllCreativeLooks(raw, defaultLook, profileMode, customFl2Bin, customFl3Bin, wbOffset);
 
   if (raw.length !== origLen) {
     throw new Error('File size mismatch error!');

@@ -313,9 +313,52 @@ def clone_look_slot(sr2_buf: bytearray, sr2_offset: int, src_start: int, dst_sta
     """内部 3110 字节槽位完整克隆与重定位"""
     inject_look_profile_block(sr2_buf, sr2_offset, sr2_buf[src_start:src_start+BLOCK_SIZE], dst_start, new_name)
 
-def unlock_all_creative_looks(raw: bytearray, default_look: str = "fl2", custom_fl2_bin: str = None, custom_fl3_bin: str = None):
+def apply_whitebalance_offset(raw: bytearray, sr2_dec: bytearray, sr2_offset: int, offset_kelvin: int = -400) -> int:
+    """
+    对 ARW RAW 白平衡 (WB_RGGBLevels / WB_RGGBLevelsAuto) 进行色温补偿调整。
+    根据实测反馈，索尼原厂 FL2 与 FL3 胶片矩阵整体倾向偏暖，在室内拍摄容易显得偏黄、白墙发暖。
+    默认自动 -400K 补偿使人像肤色通透白皙，白底纯净，兼顾浓郁胶片反差与自然健康肤色。
+    """
+    if not offset_kelvin or offset_kelvin == 0:
+        return 0
+
+    step = offset_kelvin / 100.0
+    factor_r = max(0.65, min(1.45, 1.0 + step * 0.017))
+    factor_b = max(0.65, min(1.45, 1.0 - step * 0.018))
+
+    modified_count = 0
+
+    def adjust_buf(buf: bytearray, base_off: int = 0):
+        nonlocal modified_count
+        p = 0
+        limit = len(buf) - 12
+        while p < limit:
+            tag, ttype, count = struct.unpack_from("<HHI", buf, p)
+            if (tag == 0x7313 or tag == 0x7312) and count == 4:
+                val_off = struct.unpack_from("<I", buf, p + 8)[0]
+                target_pos = None
+                if val_off + 8 <= len(buf):
+                    target_pos = val_off
+                elif base_off > 0 and val_off >= base_off and (val_off - base_off + 8) <= len(buf):
+                    target_pos = val_off - base_off
+
+                if target_pos is not None:
+                    r, g1, g2, b = struct.unpack_from("<4H", buf, target_pos)
+                    if (g1 == 1024 or g2 == 1024) and 400 < r < 9000 and 400 < b < 9000:
+                        new_r = max(1, min(8192, int(round(r * factor_r))))
+                        new_b = max(1, min(8192, int(round(b * factor_b))))
+                        struct.pack_into("<4H", buf, target_pos, new_r, g1, g2, new_b)
+                        modified_count += 1
+            p += 2
+
+    adjust_buf(sr2_dec, sr2_offset)
+    adjust_buf(raw, 0)
+    return modified_count
+
+def unlock_all_creative_looks(raw: bytearray, default_look: str = "fl2", custom_fl2_bin: str = None, custom_fl3_bin: str = None, wb_offset: int = -400):
     """
     解密 SR2SubIFD，将真实的 3110 字节 FL2/FL3 完整 Look 注入 Slot 9 (BW, 29306) 与 Slot 10 (Sepia, 32416)
+    并自动应用白平衡色温补偿 (默认 -400K)
     """
     offset, length, key = find_sr2_subifd(raw)
     sr2_enc = bytes(raw[offset:offset+length])
@@ -339,7 +382,12 @@ def unlock_all_creative_looks(raw: bytearray, default_look: str = "fl2", custom_
     else:
         clone_look_slot(sr2_dec, offset, 16866, 32416, b"FL3")
 
-    # 3. 设置默认载入外观 (Tag 0xb020)
+    # 3. 自动白平衡色温优化 (默认 -400K 去黄通透)
+    if wb_offset and wb_offset != 0:
+        c = apply_whitebalance_offset(raw, sr2_dec, offset, wb_offset)
+        print(f"[*] 已应用自动色温补偿: {wb_offset:+d}K (同步更新 {c} 处 RAW 白平衡标定)")
+
+    # 4. 设置默认载入外观 (Tag 0xb020)
     if default_look in ALL_CREATIVE_LOOKS:
         look_name = ALL_CREATIVE_LOOKS[default_look]["name"]
         styles = [b"Standard", b"Vivid", b"Neutral", b"Portrait", b"FL", b"VV2", b"IN", b"SH"]
@@ -353,7 +401,7 @@ def unlock_all_creative_looks(raw: bytearray, default_look: str = "fl2", custom_
     sr2_reenc = sony_sr2_crypt(bytes(sr2_dec), key)
     raw[offset:offset+length] = sr2_reenc
 
-def process_file(src_path: str, dst_path: str, target_model: str = "a7c2", default_look: str = "fl2", fl2_bin: str = None, fl3_bin: str = None):
+def process_file(src_path: str, dst_path: str, target_model: str = "a7c2", default_look: str = "fl2", fl2_bin: str = None, fl3_bin: str = None, wb_offset: int = -400):
     with open(src_path, "rb") as f:
         raw = bytearray(f.read())
 
@@ -366,8 +414,8 @@ def process_file(src_path: str, dst_path: str, target_model: str = "a7c2", defau
             pos = m.start()
             raw[pos:pos+9] = model_bytes
 
-    # 2. 注入全套创意外观
-    unlock_all_creative_looks(raw, default_look, fl2_bin, fl3_bin)
+    # 2. 注入全套创意外观与白平衡优化
+    unlock_all_creative_looks(raw, default_look, fl2_bin, fl3_bin, wb_offset)
 
     assert len(raw) == orig_len, "File size mismatch error!"
 
@@ -426,6 +474,12 @@ def main():
         default="fl2",
         choices=list(ALL_CREATIVE_LOOKS.keys()),
         help="默认激活选中的创意外观 (默认: fl2)"
+    )
+    parser.add_argument(
+        "--wb-offset",
+        type=int,
+        default=-400,
+        help="自动白平衡色温补偿 (Kelvin，默认: -400，自动消除 FL2/FL3 原生偏暖黄感；设为 0 保持原色温)"
     )
     parser.add_argument("--fl2-profile", help="指定外部提取的真实 FL2 3D-LUT (.bin 文件)")
     parser.add_argument("--fl3-profile", help="指定外部提取的真实 FL3 3D-LUT (.bin 文件)")
@@ -508,7 +562,7 @@ def main():
             base, ext = os.path.splitext(src)
             dst = f"{base}_all_looks{ext}"
         print(f"[*] 正在处理单张照片: {src} -> {dst}")
-        process_file(src, dst, args.target, args.look, fl2_bin, fl3_bin)
+        process_file(src, dst, args.target, args.look, fl2_bin, fl3_bin, args.wb_offset)
         print(f"[+] 处理完成! 全套 10 种创意外观已精准注入。")
         print(f"[+] 请在 Sony Edit 中打开 {dst} 查看！")
     elif os.path.isdir(args.input):
@@ -521,7 +575,7 @@ def main():
             src_file = os.path.join(src_dir, f)
             dst_file = os.path.join(dst_dir, f)
             print(f" -> 处理: {f}")
-            process_file(src_file, dst_file, args.target, args.look, fl2_bin, fl3_bin)
+            process_file(src_file, dst_file, args.target, args.look, fl2_bin, fl3_bin, args.wb_offset)
         print(f"[+] 批量处理完成，输出目录: {dst_dir}")
     else:
         print(f"[!] 路径不存在: {args.input}")
