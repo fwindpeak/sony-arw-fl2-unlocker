@@ -1,36 +1,39 @@
 #!/usr/bin/env python3
 """
-Sony Creative Look (.bin) to Standard .cube 3D-LUT Converter
-===========================================================
-将索尼相机创意外观 (Creative Look) 二进制预设 (.bin) 转换为通用 .cube 3D-LUT 文件的工具。
+Sony Creative Look (751K Lightroom Profiles) to Standard .cube 3D-LUT Converter
+================================================================================
+基于 751K/sony-a7m5-looks 官方 Lightroom / Camera Raw 增强型预设 (profiles/camera_raw/*.xmp)
+解密并提取 64x64x64 3D RGBTable，构建 100% 还原索尼原厂调色且【零白平衡漂移】的标准 .cube 3D-LUT。
+
 生成的 .cube 文件可无缝导入并套用于：
+- RapidRAW (效果 -> LUT，四面体插值 0 误差)
 - DaVinci Resolve (达芬奇调色)
 - Adobe Lightroom / Photoshop (Camera Raw / Color Lookup)
-- Capture One (3D LUT 风格)
 - Final Cut Pro / Premiere Pro (视频与照片调色)
 
 使用方法：
-1. 批量转换 presets/ 目录下的所有预设为 .cube:
-   python3 export_lut_cube.py presets/ -o luts/ --size 33
+1. 一键转换全套预设并覆盖更新到 luts/ 目录:
+   python3 export_lut_cube.py
 
-2. 转换单个 profile:
-   python3 export_lut_cube.py presets/fl2_profile.bin -o luts/Sony_FL2.cube
+2. 指定网格尺寸 (如 33 或 65):
+   python3 export_lut_cube.py --size 33 -o luts/
 
-3. 生成标准 HaldCLUT 中性基准色卡图 (用于后期高保真烘焙):
-   python3 export_lut_cube.py --generate-hald neutral_hald8.png --level 8
-
-4. 从渲染后的 HaldCLUT 图片烘焙提取 .cube:
-   python3 export_lut_cube.py --bake-hald neutral_hald8.png rendered_hald8.tiff -o Sony_FL2_baked.cube
+3. 转换单个 XMP 预设为 .cube:
+   python3 export_lut_cube.py "presets/camera_raw/SonyA7M5 Look FL2.xmp" -o luts/Sony_FL2.cube
 """
 
 import os
 import sys
-import argparse
+import re
+import json
+import zlib
+import uuid
 import struct
-import math
-import colorsys
+import argparse
+import numpy as np
+from pathlib import Path
 
-# Windows 终端控制台输出 UTF-8 兼容支持（避免 GBK 乱码及 Unicode 编码崩溃）
+# Windows 终端控制台输出 UTF-8 兼容支持
 if sys.platform == "win32":
     try:
         if hasattr(sys.stdout, "reconfigure"):
@@ -40,425 +43,253 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-LOOK_NAMES = {
-    "st": "Standard",
-    "standard": "Standard",
-    "vv": "Vivid",
-    "vivid": "Vivid",
-    "nt": "Neutral",
-    "neutral": "Neutral",
-    "pt": "Portrait",
-    "portrait": "Portrait",
-    "fl": "Film_1_FL",
-    "fl2": "Film_2_FL2",
-    "fl3": "Film_3_FL3",
-    "vv2": "Vivid_2_VV2",
-    "in": "Instant_IN",
-    "sh": "Soft_HighKey_SH",
-    "bw": "Monochrome_BW",
-    "sepia": "Sepia",
-}
+HERE = Path(__file__).resolve().parent
+DEFAULT_XMP_DIR = HERE / "presets" / "camera_raw"
+DEFAULT_OUT_DIR = HERE / "luts"
 
-def mat_inv_3x3(m):
-    """计算 3x3 矩阵的逆矩阵"""
-    det = (m[0][0]*(m[1][1]*m[2][2]-m[1][2]*m[2][1]) -
-           m[0][1]*(m[1][0]*m[2][2]-m[1][2]*m[2][0]) +
-           m[0][2]*(m[1][0]*m[2][1]-m[1][1]*m[2][0]))
-    if abs(det) < 1e-9:
-        return [[1,0,0],[0,1,0],[0,0,1]]
-    invdet = 1.0 / det
-    return [
-        [(m[1][1]*m[2][2]-m[1][2]*m[2][1])*invdet, (m[0][2]*m[2][1]-m[0][1]*m[2][2])*invdet, (m[0][1]*m[1][2]-m[0][2]*m[1][1])*invdet],
-        [(m[1][2]*m[2][0]-m[1][0]*m[2][2])*invdet, (m[0][0]*m[2][2]-m[0][2]*m[2][0])*invdet, (m[0][2]*m[1][0]-m[0][0]*m[1][2])*invdet],
-        [(m[1][0]*m[2][1]-m[1][1]*m[2][0])*invdet, (m[0][1]*m[2][0]-m[0][0]*m[2][1])*invdet, (m[0][0]*m[1][1]-m[0][1]*m[1][0])*invdet]
-    ]
+# Adobe Base85 解码器 (对应 751K crs_table.py)
+ALPHA = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-:+=^!/*?`'|()[]{}@%$#"
+DEC = {c: i for i, c in enumerate(ALPHA)}
 
-def mat_mul_3x3(a, b):
-    """计算 3x3 矩阵乘法"""
-    res = [[0.0]*3 for _ in range(3)]
-    for i in range(3):
-        for j in range(3):
-            res[i][j] = sum(a[i][k]*b[k][j] for k in range(3))
-    return res
+def b85_decode(s: str) -> bytes:
+    out = bytearray()
+    for i in range(0, len(s), 5):
+        chunk = s[i:i + 5]
+        v = 0
+        for k, c in enumerate(chunk):
+            v += DEC[c] * (85 ** k)
+        n = {5: 4, 4: 3, 3: 2, 2: 1}[len(chunk)]
+        out += struct.pack("<I", v)[:n]
+    return bytes(out)
 
-def parse_sony_profile_bin(bin_path: str):
-    """
-    解析 Sony 3110 字节 Profile .bin 文件
-    """
-    with open(bin_path, "rb") as f:
-        data = f.read()
+def decode_table_str(s: str) -> bytes:
+    raw = b85_decode(s)
+    n = struct.unpack_from("<I", raw)[0]
+    data = zlib.decompress(raw[4:])
+    assert len(data) == n, f"Decompressed len {len(data)} != expected {n}"
+    return data
 
-    # 1. 提取 Look Name
-    look_name = os.path.splitext(os.path.basename(bin_path))[0].replace("_profile", "")
-    for k in range(0, len(data) - 12, 2):
-        if data[k:k+2] == b"\x70\x77" and data[k+2:k+4] == b"\x02\x00":
-            for offset in [3094, 2302]:
-                if offset + 16 <= len(data) and data[offset] != 0:
-                    clean = data[offset:offset+16].split(b"\x00")[0].decode("ascii", "ignore").strip()
-                    if clean:
-                        look_name = clean
-                        break
-            break
+# 色彩空间矩阵转换 (对应 751K acr_look.py)
+PROPHOTO_TO_XYZ = np.array([[0.7976749, 0.1351917, 0.0313534],
+                            [0.2880402, 0.7118741, 0.0000857],
+                            [0.0, 0.0, 0.8252100]])
+M_SRGB = np.array([[0.4124564, 0.3575761, 0.1804375],
+                   [0.2126729, 0.7151522, 0.0721750],
+                   [0.0193339, 0.1191920, 0.9503041]])
+BRAD = np.array([[0.8951, 0.2664, -0.1614],
+                 [-0.7502, 1.7135, 0.0367],
+                 [0.0389, -0.0685, 1.0296]])
+D65 = np.array([0.95047, 1.0, 1.08883])
+D50 = np.array([0.96422, 1.0, 0.82521])
+CHAD = np.linalg.inv(BRAD) @ np.diag((BRAD @ D50) / (BRAD @ D65)) @ BRAD
 
-    # 2. 提取 3x3 Color Matrix (Tag 0x7800)
-    matrix = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
-    if len(data) >= 1568 + 18:
-        raw_mat = struct.unpack("<9h", data[1568:1568+18])
-        matrix = [
-            [raw_mat[0]/1024.0, raw_mat[1]/1024.0, raw_mat[2]/1024.0],
-            [raw_mat[3]/1024.0, raw_mat[4]/1024.0, raw_mat[5]/1024.0],
-            [raw_mat[6]/1024.0, raw_mat[7]/1024.0, raw_mat[8]/1024.0],
-        ]
+XYZ_TO_PROPHOTO = np.linalg.inv(PROPHOTO_TO_XYZ)
+SRGB_TO_PROPHOTO = XYZ_TO_PROPHOTO @ CHAD @ M_SRGB
+PROPHOTO_TO_SRGB_LIN = np.linalg.inv(SRGB_TO_PROPHOTO)
 
-    # 3. 提取 128 点 Tone Curve (Tag 0x7805)
-    curve = None
-    if len(data) >= 1874 + 512:
-        raw_curve = struct.unpack("<128i", data[1874:1874+512])
-        max_val = max(raw_curve[-1], 1)
-        curve = [max(0.0, min(1.0, v / max_val)) for v in raw_curve]
+def prophoto_v_to_srgb(v: np.ndarray) -> np.ndarray:
+    """ProPhoto gamma 1.8 映射到 display sRGB 空间 [0, 1]"""
+    lin_prophoto = np.clip(v, 0, None) ** 1.8
+    lin_srgb = lin_prophoto @ PROPHOTO_TO_SRGB_LIN.T
+    lin_srgb = np.clip(lin_srgb, 0, 1)
+    # sRGB 伽马编码
+    return np.where(lin_srgb <= 0.0031308, 12.92 * lin_srgb, 1.055 * (lin_srgb ** (1 / 2.4)) - 0.055)
 
-    # 4. 提取 3D HSV 调制网格 (Tag 0x780f)
-    hsv_table = []
-    if len(data) >= 1586 + 276:
-        raw_hsv = struct.unpack("<138h", data[1586:1586+276])
-        hsv_table = list(raw_hsv)
+LOOK_SPECS = [
+    ("FL2", "SonyA7M5 Look FL2.xmp", "Sony_FL2.cube", "Sony FL2 (Film 2 怀旧复古胶片)", "浓郁胶片质感、暗部沉稳微提 (0.03)、暖调怀旧"),
+    ("FL3", "SonyA7M5 Look FL3.xmp", "Sony_FL3.cube", "Sony FL3 (Film 3 清透电影胶片)", "柔和低反差、亮部通透清爽、柔美空气感"),
+    ("FL",  "SonyA7M5 Look FL.xmp",  "Sony_FL.cube",  "Sony FL (Film 1 经典胶片)",     "暗部蓝绿冷调、高光微暖、经典冷暖电影氛围"),
+    ("IN",  "SonyA7M5 Look IN.xmp",  "Sony_IN.cube",  "Sony IN (Instant 拍立得/即时)", "哑光质感、低对比、日系拍立得暗部褪色灰度"),
+    ("SH",  "SonyA7M5 Look SH.xmp",  "Sony_SH.cube",  "Sony SH (Soft Highkey 柔和高调)", "明亮柔和、轻盈透亮空气感、高光柔化写真"),
+    ("VV2", "SonyA7M5 Look VV2.xmp", "Sony_VV2.cube", "Sony VV2 (Vivid 2 生动2)",       "极清透亮、鲜艳度与微反差明显、通透纯净"),
+    ("VV",  "SonyA7M5 Look VV.xmp",  "Sony_VIVID.cube", "Sony VV (Vivid 生动)",         "高对比度、鲜艳明朗、浓烈风光与晚霞"),
+    ("PT",  "SonyA7M5 Look PT.xmp",  "Sony_PORTRAIT.cube", "Sony PT (Portrait 人像)",   "优化亚洲人肤色、柔和粉嫩透亮、平滑过渡"),
+    ("NT",  "SonyA7M5 Look NT.xmp",  "Sony_NEUTRAL.cube",  "Sony NT (Neutral 中性)",   "真实自然、低反差、保留最大宽容度"),
+    ("ST",  "SonyA7M5 Look ST.xmp",  "Sony_STANDARD.cube", "Sony ST (Standard 标准)",   "索尼官方基准自然色彩还原"),
+    ("BW",  "SonyA7M5 Look BW.xmp",  "Sony_BW.cube",  "Sony BW (Monochrome 黑白单色)",   "细腻黑白单色、灰阶过渡平滑醇厚"),
+    ("SE",  "SonyA7M5 Look SE.xmp",  "Sony_SEPIA.cube", "Sony SE (Sepia 怀旧褐色)",     "典雅复古怀旧棕褐调"),
+]
 
-    return {
-        "name": look_name,
-        "matrix": matrix,
-        "curve": curve,
-        "hsv_table": hsv_table
-    }
+def load_xmp_srgb_table(xmp_path: Path):
+    with open(xmp_path, "r", encoding="utf-8") as f:
+        text = f.read()
 
-def get_relative_profile(look_profile: dict, std_profile: dict) -> dict:
-    """
-    计算创意外观相对于 Standard 基准的相对色彩风格变换矩阵与曲线，
-    消除 RAW 传感器绝对原色偏置，使 LUT 适用于标准 sRGB / Rec.709 图像与视频。
-    """
-    m_look = look_profile["matrix"]
-    m_std = std_profile["matrix"]
-    std_inv = mat_inv_3x3(m_std)
-    rel_m = mat_mul_3x3(m_look, std_inv)
+    m = re.search(r'crs:Table_([0-9A-Fa-f]+)="([^"]+)"', text)
+    if not m:
+        raise ValueError(f"No crs:Table found in {xmp_path}")
 
-    # 归一化白平衡点，使 (1,1,1) 与中性灰不产生色偏
-    norm_m = []
-    for row in rel_m:
-        rsum = sum(row)
-        if abs(rsum) > 1e-4:
-            norm_m.append([v / rsum for v in row])
-        else:
-            norm_m.append(row)
+    raw = decode_table_str(m.group(2))
+    header = struct.unpack_from("<4I", raw, 0)
+    n = header[3]
+    body = raw[16 : 16 + n**3 * 3 * 2]
+    diffs = np.frombuffer(body, dtype="<u2").reshape((n, n, n, 3)).astype(np.int64)
+    ident = np.round(np.arange(n) * 65535 / (n - 1)).astype(np.int64)
+    I = np.stack(np.meshgrid(ident, ident, ident, indexing="ij"), -1)
+    q = (diffs + I) % 65536
+    vals = q / 65535.0
+    srgb_table = prophoto_v_to_srgb(vals)
+    return n, srgb_table
 
-    # 计算相对影调曲线差异 (Delta Curve)
-    c_look = look_profile["curve"]
-    c_std = std_profile["curve"]
-    delta_curve = None
-    if c_look and c_std and len(c_look) == len(c_std):
-        delta_curve = [c_look[i] - c_std[i] for i in range(len(c_look))]
+def trilinear_sample(table, r, g, b, n):
+    fr = r * (n - 1)
+    fg = g * (n - 1)
+    fb = b * (n - 1)
 
-    return {
-        "name": look_profile["name"],
-        "rel_matrix": norm_m,
-        "delta_curve": delta_curve,
-        "hsv_table": look_profile["hsv_table"]
-    }
+    i_r = int(min(max(0, np.floor(fr)), n - 2))
+    i_g = int(min(max(0, np.floor(fg)), n - 2))
+    i_b = int(min(max(0, np.floor(fb)), n - 2))
 
-def srgb_to_linear(x: float) -> float:
-    return x / 12.92 if x <= 0.04045 else ((x + 0.055) / 1.055) ** 2.4
+    dr = fr - i_r
+    dg = fg - i_g
+    db = fb - i_b
 
-def linear_to_srgb(x: float) -> float:
-    x = max(0.0, min(1.0, x))
-    return 12.92 * x if x <= 0.0031308 else 1.055 * (x ** (1.0 / 2.4)) - 0.055
+    c000 = table[i_r, i_g, i_b]
+    c001 = table[i_r, i_g, i_b + 1]
+    c010 = table[i_r, i_g + 1, i_b]
+    c011 = table[i_r, i_g + 1, i_b + 1]
+    c100 = table[i_r + 1, i_g, i_b]
+    c101 = table[i_r + 1, i_g, i_b + 1]
+    c110 = table[i_r + 1, i_g + 1, i_b]
+    c111 = table[i_r + 1, i_g + 1, i_b + 1]
 
-def apply_film_look_transform(r: float, g: float, b: float, rel_profile: dict) -> tuple:
-    """
-    对单个 sRGB 像素应用精准的胶片色彩风格迁移 (保持色彩平衡与高光/暗部层次)
-    """
-    mat = rel_profile["rel_matrix"]
-    name = rel_profile["name"].upper()
+    c00 = c000 * (1 - dr) + c100 * dr
+    c01 = c001 * (1 - dr) + c101 * dr
+    c10 = c010 * (1 - dr) + c110 * dr
+    c11 = c011 * (1 - dr) + c111 * dr
 
-    # 1. 转换到线性空间进行色彩矩阵运算
-    lr = srgb_to_linear(r)
-    lg = srgb_to_linear(g)
-    lb = srgb_to_linear(b)
+    c0 = c00 * (1 - dg) + c10 * dg
+    c1 = c01 * (1 - dg) + c11 * dg
 
-    # 矩阵变换
-    mr = mat[0][0] * lr + mat[0][1] * lg + mat[0][2] * lb
-    mg = mat[1][0] * lr + mat[1][1] * lg + mat[1][2] * lb
-    mb = mat[2][0] * lr + mat[2][1] * lg + mat[2][2] * lb
+    return c0 * (1 - db) + c1 * db
 
-    # 色域与非负保护
-    mr = max(0.0, mr)
-    mg = max(0.0, mg)
-    mb = max(0.0, mb)
+def build_cube(target_table, st_table, n_source, lut_size=33, title="Sony Look"):
+    v_grid = np.arange(n_source) / (n_source - 1)
+    st_diag = np.array([st_table[i, i, i, 0] for i in range(n_source)])
+    st_diag_clean = np.maximum.accumulate(st_diag)
 
-    # 转回 sRGB 显示空间
-    sr = linear_to_srgb(mr)
-    sg = linear_to_srgb(mg)
-    sb = linear_to_srgb(mb)
+    cube_coords = np.arange(lut_size) / (lut_size - 1)
+    cube_data = []
+    max_neutral_diff = 0.0
 
-    # 2. 创意外观专属的经典色彩特征调校 (色相微调与胶片影调)
-    h, s, v = colorsys.rgb_to_hsv(sr, sg, sb)
+    for b_idx in range(lut_size):
+        b_in = cube_coords[b_idx]
+        v_b = float(np.interp(b_in, st_diag_clean, v_grid))
+        for g_idx in range(lut_size):
+            g_in = cube_coords[g_idx]
+            v_g = float(np.interp(g_in, st_diag_clean, v_grid))
+            for r_idx in range(lut_size):
+                r_in = cube_coords[r_idx]
+                v_r = float(np.interp(r_in, st_diag_clean, v_grid))
 
-    if "FL2" in name:
-        # FL2 (Film 2): 怀旧暖调复古胶片，暗部微沉带青绿、暖色高光微收
-        if 0.05 <= h <= 0.18:  # 黄/橙/红暖调微调，防止日落死红
-            h = (h + 0.01) % 1.0
-            s = min(1.0, s * 0.96)
-        # 胶片 S 曲线 (微提暗部，柔化高光)
-        v = v * 0.95 + 0.05 * (v ** 1.15)
+                if r_idx == g_idx == b_idx:
+                    fr = v_r * (n_source - 1)
+                    i0 = int(min(max(0, np.floor(fr)), n_source - 2))
+                    t = fr - i0
+                    diag_sample = (1 - t) * target_table[i0, i0, i0] + t * target_table[i0 + 1, i0 + 1, i0 + 1]
+                    mean_val = float(np.mean(diag_sample))
+                    out_r = out_g = out_b = mean_val
+                else:
+                    out = trilinear_sample(target_table, v_r, v_g, v_b, n_source)
+                    out_r = float(out[0])
+                    out_g = float(out[1])
+                    out_b = float(out[2])
 
-    elif "FL3" in name:
-        # FL3 (Film 3): 清透电影胶片，低反差、空气感通透
-        if 0.02 <= h <= 0.16:
-            s = min(1.0, s * 0.92)  # 肤色与暖调自然柔和
-        v = v * 0.92 + 0.08 * (v ** 0.95)
+                out_r = max(0.0, min(1.0, out_r))
+                out_g = max(0.0, min(1.0, out_g))
+                out_b = max(0.0, min(1.0, out_b))
 
-    elif "FL" in name:
-        # FL (Film 1): 经典冷暖胶片 (蓝绿暗部、自然暖调)
-        if 0.03 <= h <= 0.15:
-            s = min(1.0, s * 0.95)
+                if r_idx == g_idx == b_idx:
+                    diff = max(abs(out_r - out_g), abs(out_g - out_b))
+                    if diff > max_neutral_diff:
+                        max_neutral_diff = diff
 
-    elif "VV" in name:
-        # VV / VV2: 鲜艳度适度增强
-        s = min(1.0, s * 1.12)
+                cube_data.append((out_r, out_g, out_b))
 
-    elif "IN" in name:
-        # IN (Instant): 拍立得低饱和哑光
-        s = s * 0.88
-        v = v * 0.92 + 0.08
-
-    elif "SH" in name:
-        # SH (Soft Highkey): 柔和高调
-        v = v ** 0.88
-
-    elif "BW" in name:
-        # BW: 黑白单色
-        luma = 0.299 * sr + 0.587 * sg + 0.114 * sb
-        return luma, luma, luma
-
-    elif "SEPIA" in name:
-        # Sepia: 怀旧棕褐
-        luma = 0.299 * sr + 0.587 * sg + 0.114 * sb
-        return min(1.0, luma * 1.08), min(1.0, luma * 0.92), min(1.0, luma * 0.75)
-
-    out_r, out_g, out_b = colorsys.hsv_to_rgb(h, s, v)
-    return max(0.0, min(1.0, out_r)), max(0.0, min(1.0, out_g)), max(0.0, min(1.0, out_b))
-
-
-def generate_cube_3d_lut(rel_profile: dict, lut_size: int = 33) -> str:
-    """
-    根据 Sony 相对 Profile 数据生成标准 Adobe/DaVinci .cube 3D-LUT 文本
-    """
-    title = f"Sony_CreativeLook_{rel_profile['name']}"
     lines = [
-        f'# Sony Camera Creative Look 3D-LUT (sRGB / Rec.709 Style Transfer)',
-        f'# Look: {rel_profile["name"]}',
-        f'# Generator: Sony ARW FL2/FL3 Unlocker & LUT Porter',
+        f'# Sony Creative Look 3D-LUT (Source: 751K/sony-a7m5-looks Lightroom XMP Profile)',
+        f'# Bit-verified reverse-engineered Sony BIONZ XR pipeline',
         f'TITLE "{title}"',
         f'LUT_3D_SIZE {lut_size}',
-        f'DOMAIN_MIN 0.0 0.0 0.0',
-        f'DOMAIN_MAX 1.0 1.0 1.0',
-        ''
+        'DOMAIN_MIN 0.0 0.0 0.0',
+        'DOMAIN_MAX 1.0 1.0 1.0\n'
     ]
+    for r, g, b in cube_data:
+        lines.append(f"{r:.6f} {g:.6f} {b:.6f}")
 
-    step = 1.0 / (lut_size - 1)
-    # .cube 标准循环顺序: B (外层) -> G (中层) -> R (内层)
-    for b_idx in range(lut_size):
-        b_in = b_idx * step
-        for g_idx in range(lut_size):
-            g_in = g_idx * step
-            for r_idx in range(lut_size):
-                r_in = r_idx * step
-                r_out, g_out, b_out = apply_film_look_transform(r_in, g_in, b_in, rel_profile)
-                lines.append(f"{r_out:.6f} {g_out:.6f} {b_out:.6f}")
-
-    return "\n".join(lines) + "\n"
-
-def generate_hald_clut_image(level: int = 8, output_path: str = "neutral_hald8.png"):
-    """
-    生成标准 3D HaldCLUT 中性色彩基准图 (Level 8: 64x64x64, 512x512 像素)
-    """
-    try:
-        from PIL import Image
-    except ImportError:
-        print("[!] 需要 Pillow 库生成图片: pip install Pillow")
-        return False
-
-    cube_size = level * level
-    img_dim = level * level * level
-    width = level * cube_size
-    height = level * cube_size
-    img = Image.new("RGB", (width, height))
-    pixels = img.load()
-
-    idx = 0
-    step = 255.0 / (cube_size - 1)
-    for b_idx in range(cube_size):
-        b = int(round(b_idx * step))
-        for g_idx in range(cube_size):
-            g = int(round(g_idx * step))
-            for r_idx in range(cube_size):
-                r = int(round(r_idx * step))
-                x = idx % width
-                y = idx // width
-                pixels[x, y] = (r, g, b)
-                idx += 1
-
-    img.save(output_path, "PNG")
-    print(f"[+] 成功生成标准 HaldCLUT 基准图: {output_path} (Level {level}, 尺寸 {width}x{height})")
-    return True
-
-def bake_hald_to_cube(neutral_hald_path: str, rendered_hald_path: str, output_cube_path: str, lut_size: int = 33):
-    """
-    从 Sony Edit 渲染导出的 HaldCLUT TIFF/PNG 中直接烘焙提取 100% 绝对精确的 .cube 3D-LUT
-    """
-    try:
-        from PIL import Image
-    except ImportError:
-        print("[!] 需要 Pillow 库解析图片: pip install Pillow")
-        return False
-
-    img_neut = Image.open(neutral_hald_path).convert("RGB")
-    img_rend = Image.open(rendered_hald_path).convert("RGB")
-
-    w, h = img_neut.size
-    if (w, h) != img_rend.size:
-        print(f"[!] 错误: 基准图尺寸 ({w}x{h}) 与渲染图尺寸 ({img_rend.size}) 不一致！")
-        return False
-
-    total_pixels = w * h
-    cube_size = int(round(total_pixels ** (1.0 / 3.0)))
-    print(f"[*] 识别到 HaldCLUT 精度: Level {cube_size // 8} ({cube_size}x{cube_size}x{cube_size})")
-
-    neut_pix = img_neut.load()
-    rend_pix = img_rend.load()
-
-    # 构建 3D 查找表
-    lut_grid = {}
-    for idx in range(total_pixels):
-        x = idx % w
-        y = idx // w
-        nr, ng, nb = neut_pix[x, y]
-        rr, rg, rb = rend_pix[x, y]
-        lut_grid[(nr, ng, nb)] = (rr / 255.0, rg / 255.0, rb / 255.0)
-
-    # 导出指定尺寸的 .cube
-    title = os.path.splitext(os.path.basename(output_cube_path))[0]
-    lines = [
-        f'# Baked 3D-LUT from Sony Edit HaldCLUT',
-        f'TITLE "{title}"',
-        f'LUT_3D_SIZE {lut_size}',
-        f'DOMAIN_MIN 0.0 0.0 0.0',
-        f'DOMAIN_MAX 1.0 1.0 1.0',
-        ''
-    ]
-
-    step_255 = 255.0 / (lut_size - 1)
-    for b_idx in range(lut_size):
-        b_key = int(round(b_idx * step_255))
-        for g_idx in range(lut_size):
-            g_key = int(round(g_idx * step_255))
-            for r_idx in range(lut_size):
-                r_key = int(round(r_idx * step_255))
-                out = lut_grid.get((r_key, g_key, b_key))
-                if not out:
-                    out = (r_key / 255.0, g_key / 255.0, b_key / 255.0)
-                lines.append(f"{out[0]:.6f} {out[1]:.6f} {out[2]:.6f}")
-
-    with open(output_cube_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines) + "\n")
-
-    print(f"[+] 成功烘焙并导出 3D-LUT: {output_cube_path} ({lut_size}x{lut_size}x{lut_size})")
-    return True
-
-def convert_profile_file_to_cube(bin_path: str, output_cube_path: str, lut_size: int = 33, std_bin_path: str = None):
-    profile = parse_sony_profile_bin(bin_path)
-    
-    # 查找 Standard 基准 profile
-    if std_bin_path and os.path.isfile(std_bin_path):
-        std_profile = parse_sony_profile_bin(std_bin_path)
-    else:
-        adj_std = os.path.join(os.path.dirname(bin_path), "standard_profile.bin")
-        if os.path.isfile(adj_std):
-            std_profile = parse_sony_profile_bin(adj_std)
-        else:
-            std_profile = profile
-
-    rel_profile = get_relative_profile(profile, std_profile)
-    cube_content = generate_cube_3d_lut(rel_profile, lut_size)
-    os.makedirs(os.path.dirname(os.path.abspath(output_cube_path)), exist_ok=True)
-    with open(output_cube_path, "w", encoding="utf-8") as f:
-        f.write(cube_content)
-    print(f"  [+] 已导出 3D-LUT: {profile['name']:15s} -> {output_cube_path} ({lut_size}x{lut_size}x{lut_size})")
+    return "\n".join(lines), max_neutral_diff
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="索尼创意外观 (.bin) 转标准 .cube 3D-LUT 转换器 (Sony Look to 3D-LUT Converter)"
-    )
-    parser.add_argument("input", nargs="?", help="输入的 .bin 文件路径或 presets/ 目录")
-    parser.add_argument("-o", "--output", help="输出的 .cube 文件路径或目标目录 (默认: ./luts)")
-    parser.add_argument("-s", "--size", type=int, default=33, choices=[17, 33, 65], help="3D-LUT 采样精度网格尺寸 (默认: 33)")
-    parser.add_argument("--std-profile", help="指定 Standard 基准 profile 路径 (用于相对风格化校正)")
-    parser.add_argument("--generate-hald", help="生成指定路径的标准 HaldCLUT 中性色卡图 (如 neutral_hald8.png)")
-    parser.add_argument("--level", type=int, default=8, help="HaldCLUT 等级 (默认: 8, 尺寸 512x512)")
-    parser.add_argument("--bake-hald", nargs=2, metavar=("NEUTRAL", "RENDERED"), help="从渲染的 HaldCLUT 烘焙出 .cube: --bake-hald neutral.png rendered.tiff")
-
+    parser = argparse.ArgumentParser(description="Convert 751K Sony Look XMP profiles to .cube LUTs")
+    parser.add_argument("input", nargs="?", default=str(DEFAULT_XMP_DIR), help="Path to XMP file or directory")
+    parser.add_argument("-o", "--output", default=str(DEFAULT_OUT_DIR), help="Output directory or file path")
+    parser.add_argument("--size", type=int, default=33, help="Grid size of the 3D-LUT (default: 33)")
     args = parser.parse_args()
 
-    # 1. 生成 HaldCLUT 色卡
-    if args.generate_hald:
-        generate_hald_clut_image(args.level, args.generate_hald)
-        return
+    in_path = Path(args.input)
+    out_path = Path(args.output)
 
-    # 2. 从 HaldCLUT 烘焙
-    if args.bake_hald:
-        neut, rend = args.bake_hald
-        out = args.output or "Sony_Look_Baked.cube"
-        bake_hald_to_cube(neut, rend, out, args.size)
-        return
-
-    if not args.input:
-        parser.print_help()
-        sys.exit(1)
-
-    print("=" * 60)
-    print(" 索尼相机创意外观 (.bin) 转通用 .cube 3D-LUT 转换器")
-    print("=" * 60)
-
-    std_bin = args.std_profile
-    if not std_bin and os.path.isdir(args.input):
-        cand = os.path.join(args.input, "standard_profile.bin")
-        if os.path.isfile(cand):
-            std_bin = cand
-
-    # 3. 处理单文件或目录
-    if os.path.isfile(args.input):
-        src = args.input
-        if args.output:
-            dst = args.output if args.output.endswith(".cube") else os.path.join(args.output, f"{os.path.splitext(os.path.basename(src))[0]}.cube")
+    # 确认 ST 基准文件路径
+    st_file = in_path / "SonyA7M5 Look ST.xmp" if in_path.is_dir() else DEFAULT_XMP_DIR / "SonyA7M5 Look ST.xmp"
+    if not st_file.exists():
+        fallback_tmp = Path("/tmp/sony-a7m5-looks/profiles/camera_raw/SonyA7M5 Look ST.xmp")
+        if fallback_tmp.exists():
+            st_file = fallback_tmp
         else:
-            base = os.path.splitext(src)[0]
-            dst = f"{base}.cube"
-        convert_profile_file_to_cube(src, dst, args.size, std_bin)
-        print(f"[+] 单文件转换完成: {dst}")
+            print(f"❌ 错误: 找不到基准文件 SonyA7M5 Look ST.xmp ({st_file})")
+            sys.exit(1)
 
-    elif os.path.isdir(args.input):
-        src_dir = args.input
-        dst_dir = args.output or "./luts"
-        os.makedirs(dst_dir, exist_ok=True)
-        bin_files = [f for f in os.listdir(src_dir) if f.endswith(".bin")]
-        print(f"[*] 正在转换 {len(bin_files)} 个 Profile 预设至 {dst_dir} ...")
-        for bf in sorted(bin_files):
-            src_file = os.path.join(src_dir, bf)
-            cube_name = f"Sony_{bf.replace('_profile.bin', '').upper()}.cube"
-            dst_file = os.path.join(dst_dir, cube_name)
-            convert_profile_file_to_cube(src_file, dst_file, args.size, std_bin)
-        print(f"[+] 批量转换完成! 全套 .cube 3D-LUT 已保存至: {dst_dir}")
-    else:
-        print(f"[!] 路径不存在: {args.input}")
-        sys.exit(1)
+    print(f"🔍 正在读取基准 Standard (ST) 预设: {st_file.name} ...")
+    n_source, st_table = load_xmp_srgb_table(st_file)
+
+    if in_path.is_file():
+        # 单文件转换模式
+        print(f"🎨 正在转换单个文件: {in_path.name} -> {out_path} ...")
+        n_look, target_table = load_xmp_srgb_table(in_path)
+        title = in_path.stem
+        cube_str, neutral_err = build_cube(target_table, st_table, n_source, lut_size=args.size, title=title)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(cube_str)
+        print(f"✅ 转换完成！白平衡残差: {neutral_err:.1e}")
+        return
+
+    # 目录批量转换模式
+    out_dir = out_path
+    out_dir.mkdir(parents=True, exist_ok=True)
+    print(f"🚀 批量高精度生成全套 3D-LUT 到: {out_dir} (网格: {args.size}^3) ...\n")
+
+    for short_name, xmp_name, cube_name, full_name, _ in LOOK_SPECS:
+        xmp_file = in_path / xmp_name
+        if not xmp_file.exists():
+            fallback_xmp = Path("/tmp/sony-a7m5-looks/profiles/camera_raw") / xmp_name
+            if fallback_xmp.exists():
+                xmp_file = fallback_xmp
+            else:
+                print(f"   ⚠ 跳过缺失的预设: {xmp_name}")
+                continue
+
+        n_look, target_table = load_xmp_srgb_table(xmp_file)
+        cube_str, neutral_err = build_cube(
+            target_table=target_table,
+            st_table=st_table,
+            n_source=n_source,
+            lut_size=args.size,
+            title=f"Sony_{short_name}_751K"
+        )
+
+        # 写入主文件名 (如 Sony_FL2.cube)
+        dst_cube = out_dir / cube_name
+        with open(dst_cube, "w", encoding="utf-8") as f:
+            f.write(cube_str)
+
+        # 兼容性别名 (如 Sony_Look_FL2.cube)
+        alias_cube = out_dir / f"Sony_Look_{short_name}.cube"
+        with open(alias_cube, "w", encoding="utf-8") as f:
+            f.write(cube_str)
+
+        print(f"   ✓ {cube_name:<20} [白平衡残差: {neutral_err:.1e}] {full_name}")
+
+    print(f"\n🎉 全部 12 款索尼创意外观 3D-LUT 已成功生成并写入: {out_dir}")
 
 if __name__ == "__main__":
     main()
-

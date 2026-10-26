@@ -1,0 +1,276 @@
+{
+  "presets": [
+    {
+      "folder": {
+        "id": "folder-751k-69882d9b",
+        "name": "Sony Creative Looks (751K 官方高保真版)",
+        "children": [
+          {
+            "id": "sony-751k-fl2-e443e0ab",
+            "name": "Sony FL2 (Film 2 怀旧复古胶片)",
+            "adjustments": {
+              "lutPath": "Sony_Look_FL2.cube",
+              "lutName": "Sony_Look_FL2",
+              "lutIntensity": 100,
+              "lutIsSceneReferred": false,
+              "lutSize": 33,
+              "contrast": 0,
+              "exposure": 0,
+              "highlights": 0,
+              "shadows": 0,
+              "whites": 0,
+              "blacks": 0,
+              "clarity": 0,
+              "toneMapper": "basic"
+            },
+            "includeMasks": false,
+            "includeCropTransform": false,
+            "presetType": "creative"
+          },
+          {
+            "id": "sony-751k-fl3-f6490552",
+            "name": "Sony FL3 (Film 3 清透电影胶片)",
+            "adjustments": {
+              "lutPath": "Sony_Look_FL3.cube",
+              "lutName": "Sony_Look_FL3",
+              "lutIntensity": 100,
+              "lutIsSceneReferred": false,
+              "lutSize": 33,
+              "contrast": 0,
+              "exposure": 0,
+              "highlights": 0,
+              "shadows": 0,
+              "whites": 0,
+              "blacks": 0,
+              "clarity": 0,
+              "toneMapper": "basic"
+            },
+            "includeMasks": false,
+            "includeCropTransform": false,
+            "presetType": "creative"
+          },
+          {
+            "id": "sony-751k-fl-857e39a2",
+            "name": "Sony FL (Film 1 经典胶片)",
+            "adjustments": {
+              "lutPath": "Sony_Look_FL.cube",
+              "lutName": "Sony_Look_FL",
+              "lutIntensity": 100,
+              "lutIsSceneReferred": false,
+              "lutSize": 33,
+              "contrast": 0,
+              "exposure": 0,
+              "highlights": 0,
+              "shadows": 0,
+              "whites": 0,
+              "blacks": 0,
+              "clarity": 0,
+              "toneMapper": "basic"
+            },
+            "includeMasks": false,
+            "includeCropTransform": false,
+            "presetType": "creative"
+          },
+          {
+            "id": "sony-751k-in-5539144e",
+            "name": "Sony IN (Instant 拍立得/即时)",
+            "adjustments": {
+              "lutPath": "Sony_Look_IN.cube",
+              "lutName": "Sony_Look_IN",
+              "lutIntensity": 100,
+              "lutIsSceneReferred": false,
+              "lutSize": 33,
+              "contrast": 0,
+              "exposure": 0,
+              "highlights": 0,
+              "shadows": 0,
+              "whites": 0,
+              "blacks": 0,
+              "clarity": 0,
+              "toneMapper": "basic"
+            },
+            "includeMasks": false,
+            "includeCropTransform": false,
+            "presetType": "creative"
+          },
+          {
+            "id": "sony-751k-sh-e8ae80e8",
+            "name": "Sony SH (Soft Highkey 柔和高调)",
+            "adjustments": {
+              "lutPath": "Sony_Look_SH.cube",
+              "lutName": "Sony_Look_SH",
+              "lutIntensity": 100,
+              "lutIsSceneReferred": false,
+              "lutSize": 33,
+              "contrast": 0,
+              "exposure": 0,
+              "highlights": 0,
+              "shadows": 0,
+              "whites": 0,
+              "blacks": 0,
+              "clarity": 0,
+              "toneMapper": "basic"
+            },
+            "includeMasks": false,
+            "includeCropTransform": false,
+            "presetType": "creative"
+          },
+          {
+            "id": "sony-751k-vv2-7900d601",
+            "name": "Sony VV2 (Vivid 2 生动2)",
+            "adjustments": {
+              "lutPath": "Sony_Look_VV2.cube",
+              "lutName": "Sony_Look_VV2",
+              "lutIntensity": 100,
+              "lutIsSceneReferred": false,
+              "lutSize": 33,
+              "contrast": 0,
+              "exposure": 0,
+              "highlights": 0,
+              "shadows": 0,
+              "whites": 0,
+              "blacks": 0,
+              "clarity": 0,
+              "toneMapper": "basic"
+            },
+            "includeMasks": false,
+            "includeCropTransform": false,
+            "presetType": "creative"
+          },
+          {
+            "id": "sony-751k-vv-e7b3ba3d",
+            "name": "Sony VV (Vivid 生动)",
+            "adjustments": {
+              "lutPath": "Sony_Look_VV.cube",
+              "lutName": "Sony_Look_VV",
+              "lutIntensity": 100,
+              "lutIsSceneReferred": false,
+              "lutSize": 33,
+              "contrast": 0,
+              "exposure": 0,
+              "highlights": 0,
+              "shadows": 0,
+              "whites": 0,
+              "blacks": 0,
+              "clarity": 0,
+              "toneMapper": "basic"
+            },
+            "includeMasks": false,
+            "includeCropTransform": false,
+            "presetType": "creative"
+          },
+          {
+            "id": "sony-751k-pt-cb254553",
+            "name": "Sony PT (Portrait 人像)",
+            "adjustments": {
+              "lutPath": "Sony_Look_PT.cube",
+              "lutName": "Sony_Look_PT",
+              "lutIntensity": 100,
+              "lutIsSceneReferred": false,
+              "lutSize": 33,
+              "contrast": 0,
+              "exposure": 0,
+              "highlights": 0,
+              "shadows": 0,
+              "whites": 0,
+              "blacks": 0,
+              "clarity": 0,
+              "toneMapper": "basic"
+            },
+            "includeMasks": false,
+            "includeCropTransform": false,
+            "presetType": "creative"
+          },
+          {
+            "id": "sony-751k-nt-8e8857bd",
+            "name": "Sony NT (Neutral 中性)",
+            "adjustments": {
+              "lutPath": "Sony_Look_NT.cube",
+              "lutName": "Sony_Look_NT",
+              "lutIntensity": 100,
+              "lutIsSceneReferred": false,
+              "lutSize": 33,
+              "contrast": 0,
+              "exposure": 0,
+              "highlights": 0,
+              "shadows": 0,
+              "whites": 0,
+              "blacks": 0,
+              "clarity": 0,
+              "toneMapper": "basic"
+            },
+            "includeMasks": false,
+            "includeCropTransform": false,
+            "presetType": "creative"
+          },
+          {
+            "id": "sony-751k-st-fdadcbfd",
+            "name": "Sony ST (Standard 标准)",
+            "adjustments": {
+              "lutPath": "Sony_Look_ST.cube",
+              "lutName": "Sony_Look_ST",
+              "lutIntensity": 100,
+              "lutIsSceneReferred": false,
+              "lutSize": 33,
+              "contrast": 0,
+              "exposure": 0,
+              "highlights": 0,
+              "shadows": 0,
+              "whites": 0,
+              "blacks": 0,
+              "clarity": 0,
+              "toneMapper": "basic"
+            },
+            "includeMasks": false,
+            "includeCropTransform": false,
+            "presetType": "creative"
+          },
+          {
+            "id": "sony-751k-bw-29af627e",
+            "name": "Sony BW (Monochrome 黑白单色)",
+            "adjustments": {
+              "lutPath": "Sony_Look_BW.cube",
+              "lutName": "Sony_Look_BW",
+              "lutIntensity": 100,
+              "lutIsSceneReferred": false,
+              "lutSize": 33,
+              "contrast": 0,
+              "exposure": 0,
+              "highlights": 0,
+              "shadows": 0,
+              "whites": 0,
+              "blacks": 0,
+              "clarity": 0,
+              "toneMapper": "basic"
+            },
+            "includeMasks": false,
+            "includeCropTransform": false,
+            "presetType": "creative"
+          },
+          {
+            "id": "sony-751k-se-9ca648f9",
+            "name": "Sony SE (Sepia 怀旧褐色)",
+            "adjustments": {
+              "lutPath": "Sony_Look_SE.cube",
+              "lutName": "Sony_Look_SE",
+              "lutIntensity": 100,
+              "lutIsSceneReferred": false,
+              "lutSize": 33,
+              "contrast": 0,
+              "exposure": 0,
+              "highlights": 0,
+              "shadows": 0,
+              "whites": 0,
+              "blacks": 0,
+              "clarity": 0,
+              "toneMapper": "basic"
+            },
+            "includeMasks": false,
+            "includeCropTransform": false,
+            "presetType": "creative"
+          }
+        ]
+      }
+    }
+  ]
+}
