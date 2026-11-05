@@ -6,6 +6,7 @@
       "name": "web",
       "dependencies": {
         "canvas-confetti": "^1.9.4",
+        "flashraw": "^0.1.0",
         "jszip": "^3.10.2",
         "lucide-react": "^1.59.0",
         "react": "^19.2.8",
@@ -108,6 +109,8 @@
     "detect-libc": ["detect-libc@2.1.2", "https://registry.npmmirror.com/detect-libc/-/detect-libc-2.1.2.tgz", {}, "sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ=="],
 
     "fdir": ["fdir@6.5.0", "https://registry.npmmirror.com/fdir/-/fdir-6.5.0.tgz", { "peerDependencies": { "picomatch": "^3 || ^4" }, "optionalPeers": ["picomatch"] }, "sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg=="],
+
+    "flashraw": ["flashraw@0.1.0", "", {}, "sha512-2g0tZhj21DGIYBv9KcHaXC1/pMbNo+fxmjnhabgjK05gkmYBRjMCA1XD5G4KLWZxdai7/PRBm7E7fxRQXhDSSQ=="],
 
     "fsevents": ["fsevents@2.3.3", "https://registry.npmmirror.com/fsevents/-/fsevents-2.3.3.tgz", { "os": "darwin" }, "sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw=="],
 

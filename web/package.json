@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "canvas-confetti": "^1.9.4",
+    "flashraw": "^0.1.0",
     "jszip": "^3.10.2",
     "lucide-react": "^1.59.0",
     "react": "^19.2.8",

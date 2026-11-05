@@ -514,24 +514,36 @@ export class SonyColorRenderer {
     gl.viewport(0, 0, this.imageWidth, this.imageHeight);
   }
 
+  // 静态解析缓存，避免多次重复 fetch 与解析
+  static parsedCubeCache = new Map();
+
   // 异步加载并绑定 3D-LUT 文件 (.cube)
   async loadLut(lookKey, basePath = '') {
     if (this.lutTextures.has(lookKey)) {
       return this.lutTextures.get(lookKey);
     }
 
-    const lookConfig = SONY_CREATIVE_LOOKS[lookKey] || SONY_CREATIVE_LOOKS.ST;
-    const cubeUrl = `${basePath}/luts/${lookConfig.lutFile}`;
+    let lutData = SonyColorRenderer.parsedCubeCache.get(lookKey);
+    if (!lutData) {
+      const lookConfig = SONY_CREATIVE_LOOKS[lookKey] || SONY_CREATIVE_LOOKS.ST;
+      const cubeUrl = `${basePath}/luts/${lookConfig.lutFile}`;
 
-    try {
-      const resp = await fetch(cubeUrl);
-      if (!resp.ok) {
-        console.warn(`LUT 文件 ${cubeUrl} 加载失败`);
+      try {
+        const resp = await fetch(cubeUrl);
+        if (!resp.ok) {
+          console.warn(`LUT 文件 ${cubeUrl} 加载失败`);
+          return null;
+        }
+        const text = await resp.text();
+        lutData = this.parseCube(text);
+        SonyColorRenderer.parsedCubeCache.set(lookKey, lutData);
+      } catch (e) {
+        console.warn('解析或绑定 3D-LUT 错误:', e);
         return null;
       }
-      const text = await resp.text();
-      const lutData = this.parseCube(text);
+    }
 
+    try {
       const gl = this.gl;
       const tex = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_3D, tex);
@@ -558,7 +570,7 @@ export class SonyColorRenderer {
       this.lutTextures.set(lookKey, tex);
       return tex;
     } catch (e) {
-      console.warn('解析或绑定 3D-LUT 错误:', e);
+      console.warn('创建 3D 纹理错误:', e);
       return null;
     }
   }
@@ -679,6 +691,60 @@ export class SonyColorRenderer {
     }
     this.lutTextures.forEach((t) => gl.deleteTexture(t));
     if (this.program) gl.deleteProgram(this.program);
+  }
+
+  /**
+   * 静态离屏全分辨率高保真渲染并导出为 JPEG Blob
+   * @param {Object} options
+   * @param {HTMLImageElement | ImageBitmap} options.fullImg 全分辨率图像
+   * @param {Object} options.params 调色参数
+   * @param {string} options.basePath 基础路径
+   * @param {number} options.quality JPEG 质量 (默认 0.96)
+   * @returns {Promise<Blob>}
+   */
+  static async exportFullResolution({
+    fullImg,
+    params,
+    basePath = '',
+    quality = 0.96,
+  }) {
+    const origWidth = fullImg.naturalWidth || fullImg.width;
+    const origHeight = fullImg.naturalHeight || fullImg.height;
+
+    // 创建离屏 Canvas
+    const exportCanvas = document.createElement('canvas');
+    exportCanvas.width = origWidth;
+    exportCanvas.height = origHeight;
+
+    const renderer = new SonyColorRenderer(exportCanvas);
+    if (!renderer.gl) {
+      throw new Error('离屏 WebGL2 上下文初始化失败');
+    }
+
+    try {
+      renderer.setImage(fullImg);
+      await renderer.loadLut(params.look || 'FL2', basePath);
+
+      // 全画幅无分屏渲染
+      renderer.render({
+        ...params,
+        splitMode: 0,
+        splitRatio: 1.0,
+      });
+
+      return await new Promise((resolve, reject) => {
+        exportCanvas.toBlob(
+          (blob) => {
+            if (blob) resolve(blob);
+            else reject(new Error('Canvas toBlob 导出失败'));
+          },
+          'image/jpeg',
+          quality
+        );
+      });
+    } finally {
+      renderer.destroy();
+    }
   }
 }
 
