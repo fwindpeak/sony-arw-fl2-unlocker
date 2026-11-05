@@ -277,10 +277,11 @@ void main() {
         }
 
         // 白平衡温差校正 (-2000K ~ +2000K)
-        // 负值为去黄冷调 (减少红增益，增加蓝增益)
+        // 负值为降色温冷调 (降低红增益，提升蓝增益，去除黄气与通透肤色)
+        // 正值为升色温暖调 (提升红增益，降低蓝增益，呈现日落与极暖复古)
         if (u_wbOffset != 0.0 || u_tint != 0.0) {
-            float rGain = 1.0 - u_wbOffset * 0.00015;
-            float bGain = 1.0 + u_wbOffset * 0.00018;
+            float rGain = 1.0 + u_wbOffset * 0.00017;
+            float bGain = 1.0 - u_wbOffset * 0.00018;
             float gGain = 1.0 - u_tint * 0.004;
             lin.r *= rGain;
             lin.b *= bGain;
