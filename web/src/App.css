@@ -532,6 +532,46 @@
   border-color: rgba(239, 68, 68, 0.3);
 }
 
+.btn-icon.btn-studio {
+  color: #00d2ff;
+  border-color: rgba(0, 210, 255, 0.25);
+}
+
+.btn-icon.btn-studio:hover {
+  background: rgba(0, 210, 255, 0.2);
+  color: #fff;
+  border-color: #00d2ff;
+  box-shadow: 0 0 12px rgba(0, 210, 255, 0.4);
+}
+
+.thumb-studio-tag {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(15, 17, 21, 0.85);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(0, 210, 255, 0.35);
+  color: #00d2ff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 6px;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.card-thumb-wrap:hover .thumb-studio-tag {
+  background: #00d2ff;
+  color: #0a0b0e;
+  border-color: #00d2ff;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 14px rgba(0, 210, 255, 0.5);
+}
+
 .btn-card-unlock {
   flex: 1;
   display: inline-flex;

@@ -3,8 +3,6 @@ import {
   Camera,
   Upload,
   Download,
-  CheckCircle2,
-  AlertCircle,
   Sparkles,
   Trash2,
   Eye,
@@ -13,22 +11,18 @@ import {
   Plus,
   HelpCircle,
   X,
-  Maximize2,
   Sliders,
-  ShieldCheck,
-  Check
+  Check,
+  Palette
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import JSZip from 'jszip';
 import {
   inspectArw,
   processArw,
-  ALL_CREATIVE_LOOKS,
-  TARGET_MODELS,
-  PROFILE_MODES,
-  WB_OFFSETS
 } from './core/camoufArw';
 import { extractPreviewFromArw, createJpegObjectUrl } from './core/previewExtractor';
+import LookStudioModal from './components/LookStudioModal';
 import './App.css';
 
 export default function App() {
@@ -42,6 +36,7 @@ export default function App() {
   const [showHelp, setShowHelp] = useState(false);
   const [inspectTarget, setInspectTarget] = useState(null);
   const [lightboxImg, setLightboxImg] = useState(null);
+  const [studioTarget, setStudioTarget] = useState(null);
 
   const fileInputRef = useRef(null);
 
@@ -125,8 +120,8 @@ export default function App() {
     }
   };
 
-  // 单个文件解锁注入处理
-  const processSingleFile = async (item) => {
+  // 单个文件解锁注入处理 (支持创意外观工作室参数覆盖)
+  const processSingleFile = async (item, lookOverride = null, wbOverride = null) => {
     setFiles((prev) =>
       prev.map((f) =>
         f.id === item.id ? { ...f, status: 'processing', error: null } : f
@@ -135,11 +130,14 @@ export default function App() {
 
     try {
       const fullBuffer = await item.file.arrayBuffer();
+      const effLook = lookOverride || defaultLook;
+      const effWb = wbOverride !== null && wbOverride !== undefined ? Number(wbOverride) : Number(wbOffset);
+
       const outputUint8 = processArw(fullBuffer, {
         targetModel,
-        defaultLook,
+        defaultLook: effLook,
         profileMode,
-        wbOffset: Number(wbOffset),
+        wbOffset: effWb,
       });
 
       const updatedInfo = inspectArw(outputUint8, item.name);
@@ -159,6 +157,19 @@ export default function App() {
             : f
         )
       );
+
+      // 若由调色工作室单独触发注入，自动触发保存下载该照片
+      if (lookOverride) {
+        const baseName = item.name.replace(/\.[^/.]+$/, '');
+        const ext = item.name.substring(item.name.lastIndexOf('.'));
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = `${baseName}_${effLook.toUpperCase()}${ext}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }
+
       return true;
     } catch (err) {
       setFiles((prev) =>
@@ -463,9 +474,10 @@ export default function App() {
                     className="card-thumb-wrap"
                     onClick={() => {
                       if (item.previewUrl) {
-                        setLightboxImg({ url: item.previewUrl, name: item.name });
+                        setStudioTarget(item);
                       }
                     }}
+                    title="点击进入创意外观实时调色与分屏对比工作室"
                   >
                     {item.previewUrl ? (
                       <img
@@ -489,10 +501,11 @@ export default function App() {
                       </div>
                     )}
 
-                    {/* 放大镜微标 */}
+                    {/* 调色工作室微标 */}
                     {item.previewUrl && (
-                      <div className="thumb-zoom-icon" title="点击放大预览">
-                        <Maximize2 size={14} />
+                      <div className="thumb-studio-tag" title="点击打开创意外观调色工作室">
+                        <Sparkles size={12} />
+                        <span>实时调色</span>
                       </div>
                     )}
 
@@ -517,6 +530,16 @@ export default function App() {
                     </div>
 
                     <div className="card-actions">
+                      {item.previewUrl && (
+                        <button
+                          className="btn-icon btn-studio"
+                          onClick={() => setStudioTarget(item)}
+                          title="🎨 创意外观调色工作室 (实时渲染与切换)"
+                        >
+                          <Palette size={15} />
+                        </button>
+                      )}
+
                       {item.info && (
                         <button
                           className="btn-icon"
@@ -741,6 +764,14 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+      {/* 索尼创意外观实时调色与分屏对比工作室 */}
+      {studioTarget && (
+        <LookStudioModal
+          photoItem={studioTarget}
+          onClose={() => setStudioTarget(null)}
+          onApplyToArw={processSingleFile}
+        />
       )}
     </div>
   );
