@@ -9,20 +9,20 @@ on:
       - '.github/workflows/deploy-pages.yml'
   workflow_dispatch:
 
+# 赋予部署 GitHub Pages 所需的权限
 permissions:
   contents: read
   pages: write
   id-token: write
 
+# 保证同一时间只有一个部署在进行
 concurrency:
   group: 'pages'
   cancel-in-progress: false
 
 jobs:
-  build-and-deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+  # 构建工作流：编译 Vite 项目并上传 Pages 制品
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -31,7 +31,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: 'npm'
           cache-dependency-path: 'web/package-lock.json'
 
@@ -51,6 +51,14 @@ jobs:
         with:
           path: './web/dist'
 
+  # 部署工作流：将制品发布至 GitHub Pages 环境
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
