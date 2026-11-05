@@ -35,10 +35,10 @@ export async function extractLookLut(officialJpgPath, lookCode) {
     throw new Error(`Official JPEG not found at: ${officialJpgPath}`);
   }
 
-  // 1. Decode official JPEG to raw RGB binary using python3 PIL
+  // 1. Decode official JPEG to raw RGB binary using python3 PIL and ensure 1:1 match with FlashRaw
   const tempBin = `/tmp/official_${lookCode.toLowerCase()}_rgb.bin`;
-  console.log(`Converting reference JPEG to raw RGB binary via Python PIL...`);
-  const pyScript = `from PIL import Image; im = Image.open("${officialJpgPath}").convert("RGB"); open("${tempBin}", "wb").write(im.tobytes())`;
+  console.log(`Converting reference JPEG to raw RGB binary via Python PIL (auto-resizing to 7008x4672 if needed)...`);
+  const pyScript = `from PIL import Image; im = Image.open("${officialJpgPath}").convert("RGB"); (im if im.size == (7008, 4672) else im.resize((7008, 4672), Image.Resampling.LANCZOS)).save("${tempBin}", format="RAW") if False else open("${tempBin}", "wb").write((im if im.size == (7008, 4672) else im.resize((7008, 4672), Image.Resampling.LANCZOS)).tobytes())`;
   execSync(`python3 -c '${pyScript}'`);
 
   const outBuf = fs.readFileSync(tempBin);
