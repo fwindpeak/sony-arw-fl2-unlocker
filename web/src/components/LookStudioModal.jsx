@@ -72,21 +72,22 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
   }, [photoItem?.file]);
 
   // 触发着色器渲染
-  const triggerRender = useCallback(() => {
+  const triggerRender = useCallback((overrides = {}) => {
     if (!rendererRef.current) return;
 
+    const currentLook = overrides.look || selectedLook;
     rendererRef.current.render({
-      look: selectedLook,
-      lutIntensity,
-      exposure,
-      contrast,
-      highlights,
-      shadows,
-      wbOffset,
-      tint,
-      saturation,
-      splitMode: isHoldingOriginal ? 2 : splitMode,
-      splitRatio,
+      look: currentLook,
+      lutIntensity: overrides.lutIntensity !== undefined ? overrides.lutIntensity : lutIntensity,
+      exposure: overrides.exposure !== undefined ? overrides.exposure : exposure,
+      contrast: overrides.contrast !== undefined ? overrides.contrast : contrast,
+      highlights: overrides.highlights !== undefined ? overrides.highlights : highlights,
+      shadows: overrides.shadows !== undefined ? overrides.shadows : shadows,
+      wbOffset: overrides.wbOffset !== undefined ? overrides.wbOffset : wbOffset,
+      tint: overrides.tint !== undefined ? overrides.tint : tint,
+      saturation: overrides.saturation !== undefined ? overrides.saturation : saturation,
+      splitMode: isHoldingOriginal ? 2 : (overrides.splitMode !== undefined ? overrides.splitMode : splitMode),
+      splitRatio: overrides.splitRatio !== undefined ? overrides.splitRatio : splitRatio,
     });
   }, [
     selectedLook,
@@ -147,7 +148,7 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
         setIsDecodingRaw(false);
         // 确保 LUT 已就绪后渲染
         await renderer.loadLut(selectedLook, import.meta.env.BASE_URL.replace(/\/$/, ''));
-        if (!cancelled) triggerRender();
+        if (!cancelled) triggerRender({ look: selectedLook });
       }).catch((err) => {
         console.warn('自动 RAW 拜耳解码异常，继续保留预览图:', err);
         if (!cancelled) setIsDecodingRaw(false);
@@ -173,7 +174,7 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
       setIsLoadingLut(true);
       await rendererRef.current.loadLut(lookKey, import.meta.env.BASE_URL.replace(/\/$/, ''));
       setIsLoadingLut(false);
-      triggerRender();
+      triggerRender({ look: lookKey });
     }
   };
 
