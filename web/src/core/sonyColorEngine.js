@@ -693,6 +693,10 @@ export class SonyColorRenderer {
     if (this.program) gl.deleteProgram(this.program);
   }
 
+  dispose() {
+    this.destroy();
+  }
+
   /**
    * 静态离屏全分辨率高保真渲染并导出为 JPEG Blob
    * @param {Object} options

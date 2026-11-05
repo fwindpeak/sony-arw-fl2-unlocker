@@ -3,7 +3,6 @@ import {
   Camera,
   Upload,
   Download,
-  Sparkles,
   Trash2,
   Eye,
   Archive,
@@ -13,19 +12,41 @@ import {
   X,
   Sliders,
   Check,
-  Palette
+  Palette,
+  Sun,
+  Moon,
+  RectangleHorizontal,
+  RectangleVertical,
+  CheckCircle2,
+  RotateCw
 } from 'lucide-react';
-import confetti from 'canvas-confetti';
 import JSZip from 'jszip';
 import {
   inspectArw,
   processArw,
 } from './core/camoufArw';
-import { extractPreviewFromArw, createJpegObjectUrl } from './core/previewExtractor';
+import {
+  extractPreviewWithInfo,
+  createOrientedJpegUrl,
+  computeOrientationInfo,
+  detectImageOrientation
+} from './core/previewExtractor';
 import LookStudioModal from './components/LookStudioModal';
 import './App.css';
 
 export default function App() {
+  const [theme, setTheme] = useState(() => {
+    try {
+      const saved = localStorage.getItem('sony_arw_theme');
+      if (saved === 'dark' || saved === 'light') return saved;
+      return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches
+        ? 'light'
+        : 'dark';
+    } catch {
+      return 'dark';
+    }
+  });
+
   const [files, setFiles] = useState([]);
   const [targetModel, setTargetModel] = useState('a7c2');
   const [defaultLook, setDefaultLook] = useState('fl2');
@@ -40,7 +61,19 @@ export default function App() {
 
   const fileInputRef = useRef(null);
 
-  // 清理生成的 Object URL 防止内存泄漏
+  // 同步主题至 html 根节点并持久化
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    try {
+      localStorage.setItem('sony_arw_theme', theme);
+    } catch {}
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+  };
+
+  // 释放 Object URL 避免内存泄露
   useEffect(() => {
     return () => {
       files.forEach((f) => {
@@ -50,7 +83,7 @@ export default function App() {
     };
   }, []);
 
-  // 添加文件到队列并异步极速提取预览图与元数据
+  // 添加文件到队列并异步解析内嵌预览图、EXIF 方向与元数据
   const addFilesToQueue = async (newFileList) => {
     const rawFiles = Array.from(newFileList).filter((f) =>
       /\.(arw|srf|sr2)$/i.test(f.name)
@@ -64,23 +97,28 @@ export default function App() {
 
         let info = null;
         let previewUrl = null;
+        let orientationInfo = null;
 
         try {
-          // 1. 切片 256KB 极速解析元数据
+          // 1. 切片 256KB 极速解析 ARW 结构元数据
           const sliceHeader = await file.slice(0, 256 * 1024).arrayBuffer();
           info = inspectArw(sliceHeader, file.name);
         } catch (e) {
-          console.warn('元数据解析警告:', e);
+          console.warn('元数据解析提示:', e);
         }
 
         try {
-          // 2. 切片读取前 3.5MB，0.5ms 内秒级提取 1616x1080 内嵌 HD JPEG 预览
-          const jpegBytes = await extractPreviewFromArw(file);
-          if (jpegBytes) {
-            previewUrl = createJpegObjectUrl(jpegBytes);
+          // 2. 提取内嵌高清 JPEG 与 EXIF 方向信息，并自动根据 Orientation 纠偏旋转物理像素
+          const result = await extractPreviewWithInfo(file);
+          orientationInfo = result.orientationInfo;
+          if (result.bytes) {
+            previewUrl = await createOrientedJpegUrl(
+              result.bytes,
+              orientationInfo?.exifOrientation || 1
+            );
           }
         } catch (e) {
-          console.warn('预览图提取警告:', e);
+          console.warn('预览图解析提示:', e);
         }
 
         return {
@@ -92,6 +130,7 @@ export default function App() {
           error: null,
           info,
           previewUrl,
+          orientationInfo,
           processedBlobUrl: null,
           processedBuffer: null,
         };
@@ -101,7 +140,7 @@ export default function App() {
     setFiles((prev) => [...prev, ...newItems]);
   };
 
-  // 拖拽处理
+  // 拖拽事件监听
   const handleDragOver = (e) => {
     e.preventDefault();
     setIsDragOver(true);
@@ -120,7 +159,7 @@ export default function App() {
     }
   };
 
-  // 单个文件解锁注入处理 (支持创意外观工作室参数覆盖)
+  // 单个文件注入处理
   const processSingleFile = async (item, lookOverride = null, wbOverride = null) => {
     setFiles((prev) =>
       prev.map((f) =>
@@ -158,7 +197,7 @@ export default function App() {
         )
       );
 
-      // 若由调色工作室单独触发注入，自动触发保存下载该照片
+      // 若由调色暗房单独触发注入，自动触发保存下载
       if (lookOverride) {
         const baseName = item.name.replace(/\.[^/.]+$/, '');
         const ext = item.name.substring(item.name.lastIndexOf('.'));
@@ -183,33 +222,20 @@ export default function App() {
     }
   };
 
-  // 批量解锁全部文件
+  // 批量注入全部文件
   const handleProcessAll = async () => {
     if (files.length === 0 || isProcessingAll) return;
 
     setIsProcessingAll(true);
-    let successCount = 0;
-
     for (const item of files) {
       if (item.status !== 'done') {
-        const ok = await processSingleFile(item);
-        if (ok) successCount++;
+        await processSingleFile(item);
       }
     }
-
     setIsProcessingAll(false);
-
-    if (successCount > 0) {
-      confetti({
-        particleCount: 70,
-        spread: 60,
-        origin: { y: 0.7 },
-        colors: ['#f35e16', '#00d2ff', '#10b981', '#f5a623'],
-      });
-    }
   };
 
-  // 单独下载某张照片
+  // 单独下载文件
   const handleDownloadSingle = (item) => {
     if (!item.processedBlobUrl) return;
     const baseName = item.name.replace(/\.[^/.]+$/, '');
@@ -222,7 +248,7 @@ export default function App() {
     document.body.removeChild(a);
   };
 
-  // 打包下载全部已解锁照片为 ZIP
+  // 批量下载为 ZIP 压缩包
   const handleDownloadAllZip = async () => {
     const doneFiles = files.filter((f) => f.status === 'done' && f.processedBuffer);
     if (doneFiles.length === 0) return;
@@ -238,14 +264,37 @@ export default function App() {
     const url = URL.createObjectURL(zipBlob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `Sony_ARW_Unlocked_${Date.now()}.zip`;
+    a.download = `Sony_ARW_Profiles_${Date.now()}.zip`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
 
-  // 删除某一项
+  // 手动切换/旋转画幅方向 (横向 / 纵向切换)
+  const handleToggleOrientation = (id) => {
+    setFiles((prev) =>
+      prev.map((item) => {
+        if (item.id !== id) return item;
+        const currentIsPortrait = item.orientationInfo?.isPortrait ?? false;
+        const nextIsPortrait = !currentIsPortrait;
+        const ratioTag = nextIsPortrait ? '2:3' : '3:2';
+        const label = nextIsPortrait ? '纵向' : '横向';
+        return {
+          ...item,
+          orientationInfo: {
+            ...item.orientationInfo,
+            isPortrait: nextIsPortrait,
+            orientation: nextIsPortrait ? 'portrait' : 'landscape',
+            ratioTag,
+            label,
+          },
+        };
+      })
+    );
+  };
+
+  // 移除单项
   const handleRemoveFile = (id) => {
     setFiles((prev) => {
       const target = prev.find((f) => f.id === id);
@@ -265,7 +314,6 @@ export default function App() {
   };
 
   const doneCount = files.filter((f) => f.status === 'done').length;
-  const pendingCount = files.filter((f) => f.status !== 'done').length;
 
   return (
     <div className="tool-app">
@@ -282,14 +330,14 @@ export default function App() {
         }}
       />
 
-      {/* 顶部超紧凑导航栏 */}
+      {/* 顶部专业工具导航栏 */}
       <header className="tool-navbar">
         <div className="navbar-left">
           <div className="logo-box">
-            <Camera size={20} className="logo-icon" />
+            <Camera size={18} className="logo-icon" />
           </div>
           <div className="brand-title">
-            <span className="brand-name">Sony ARW 解锁</span>
+            <span className="brand-name">Sony ARW 创意外观工具</span>
             <span className="brand-badge">FL2 / FL3</span>
           </div>
         </div>
@@ -300,29 +348,40 @@ export default function App() {
               <button
                 className="nav-btn add-btn"
                 onClick={() => fileInputRef.current?.click()}
-                title="添加更多 ARW 照片"
+                title="导入更多 ARW 文件"
               >
-                <Plus size={16} />
-                <span className="btn-text">添加照片</span>
+                <Plus size={15} />
+                <span className="btn-text">导入照片</span>
               </button>
               <button
                 className="nav-btn"
                 onClick={handleClearAll}
                 disabled={isProcessingAll}
-                title="清空列表"
+                title="清空当前照片列表"
               >
-                <Trash2 size={16} />
-                <span className="btn-text">清空</span>
+                <Trash2 size={15} />
+                <span className="btn-text">清空列表</span>
               </button>
             </>
           )}
 
+          {/* 亮色 / 暗色主题切换按钮 */}
+          <button
+            className="nav-btn theme-toggle-btn"
+            onClick={toggleTheme}
+            title={theme === 'dark' ? '切换至亮色模式' : '切换至暗色模式'}
+            aria-label="切换界面色彩主题"
+          >
+            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+
           <button
             className="nav-btn help-btn"
             onClick={() => setShowHelp(true)}
-            title="关于与使用说明"
+            title="关于与技术说明"
+            aria-label="查看技术说明"
           >
-            <HelpCircle size={18} />
+            <HelpCircle size={16} />
           </button>
         </div>
       </header>
@@ -330,64 +389,66 @@ export default function App() {
       {/* 核心控制条 (参数配置与主要操作) */}
       <section className="control-strip">
         <div className="config-selectors">
-          {/* 激活外观 */}
+          {/* 预设外观 */}
           <div className="select-pill">
-            <label>激活外观</label>
+            <label>目标外观</label>
             <select
               value={defaultLook}
               onChange={(e) => setDefaultLook(e.target.value)}
             >
               <option value="fl2">FL2 (复古胶片 2)</option>
               <option value="fl3">FL3 (清透电影 3)</option>
-              <option value="keep">保持拍摄设置</option>
+              <option value="keep">保持原拍摄设置</option>
               <option value="fl">FL (经典胶片 1)</option>
-              <option value="in">IN (即时拍立得)</option>
+              <option value="in">IN (拍立得 / 即时)</option>
               <option value="sh">SH (柔和高调)</option>
-              <option value="vv2">VV2 (极清生动)</option>
-              <option value="st">Standard (标准)</option>
-              <option value="pt">Portrait (人像)</option>
+              <option value="vv2">VV2 (极清生动 2)</option>
+              <option value="st">ST (标准)</option>
+              <option value="pt">PT (人像优化)</option>
+              <option value="nt">NT (中性)</option>
+              <option value="vv">VV (鲜艳)</option>
             </select>
           </div>
 
-          {/* 调色方案 */}
+          {/* 色彩调校方案 */}
           <div className="select-pill">
-            <label>色彩调校</label>
+            <label>色彩校准</label>
             <select
               value={profileMode}
               onChange={(e) => setProfileMode(e.target.value)}
             >
-              <option value="balanced">✨ 通透平衡版 (推荐)</option>
-              <option value="factory">🏛️ 原厂浓郁版</option>
+              <option value="balanced">通透平衡校准 (推荐)</option>
+              <option value="factory">原厂高暖色彩</option>
             </select>
           </div>
 
-          {/* 白平衡色温优化 */}
+          {/* 白平衡色温补偿 */}
           <div className="select-pill">
-            <label>色温优化</label>
+            <label>色温补偿</label>
             <select
               value={wbOffset}
               onChange={(e) => setWbOffset(e.target.value)}
             >
-              <option value="-400">✨ 自动 -400K (去黄通透 · 推荐)</option>
-              <option value="-200">❄️ 微调 -200K (自然微冷)</option>
-              <option value="-600">🧊 强力 -600K (日系清冷)</option>
-              <option value="0">📷 保持原片色温 (0K)</option>
+              <option value="-400">-400K (肤色通透 / 推荐)</option>
+              <option value="-200">-200K (自然微冷)</option>
+              <option value="-600">-600K (清冷冷调)</option>
+              <option value="0">0K (保持原片色温)</option>
             </select>
           </div>
 
-          {/* 伪装机型 */}
+          {/* 伪装机型标定 */}
           <div className="select-pill hide-on-tiny">
             <label>机型标定</label>
             <select
               value={targetModel}
               onChange={(e) => setTargetModel(e.target.value)}
             >
-              <option value="a7c2">A7C II (推荐)</option>
-              <option value="keep">保持原机型</option>
-              <option value="a7m4">A7 IV</option>
-              <option value="a7rm5">A7R V</option>
-              <option value="a1m2">A1 II</option>
-              <option value="a9m3">A9 III</option>
+              <option value="a7c2">A7C II (ILCE-7CM2 / 推荐)</option>
+              <option value="keep">保持原机型标定</option>
+              <option value="a7m4">A7 IV (ILCE-7M4)</option>
+              <option value="a7rm5">A7R V (ILCE-7RM5)</option>
+              <option value="a1m2">A1 II (ILCE-1M2)</option>
+              <option value="a9m3">A9 III (ILCE-9M3)</option>
             </select>
           </div>
         </div>
@@ -399,8 +460,8 @@ export default function App() {
               className="action-btn download-all-btn"
               onClick={handleDownloadAllZip}
             >
-              <Archive size={15} />
-              打包 ZIP ({doneCount})
+              <Archive size={14} />
+              导出 ZIP ({doneCount})
             </button>
           )}
 
@@ -411,13 +472,13 @@ export default function App() {
           >
             {isProcessingAll ? (
               <>
-                <RefreshCw size={15} className="spin" />
-                正在解锁...
+                <RefreshCw size={14} className="spin" />
+                正在处理...
               </>
             ) : (
               <>
-                <Sparkles size={15} />
-                一键解锁全部 {files.length > 0 && `(${files.length})`}
+                <CheckCircle2 size={14} />
+                批量注入处理 {files.length > 0 && `(${files.length})`}
               </>
             )}
           </button>
@@ -426,8 +487,8 @@ export default function App() {
 
       {/* 主工作区 */}
       <main className="tool-main">
-        {/* 列表为空时的极简拖拽上传卡片 */}
         {files.length === 0 ? (
+          /* 空状态：专业导入卡片 */
           <div
             className={`empty-uploader ${isDragOver ? 'drag-active' : ''}`}
             onDragOver={handleDragOver}
@@ -436,11 +497,11 @@ export default function App() {
             onClick={() => fileInputRef.current?.click()}
           >
             <div className="upload-circle">
-              <Upload size={36} />
+              <Upload size={32} />
             </div>
-            <h2 className="upload-title">选择或拖入索尼 ARW 照片</h2>
+            <h2 className="upload-title">导入索尼 ARW 原始文件</h2>
             <p className="upload-desc">
-              无需上传服务器，100% 浏览器本地极速运算，安全保护原创隐私
+              支持点击选择或直接将 ARW 拖入此处。解析与外观注入全部在浏览器本地内存中执行，保护原创数据。
             </p>
             <div className="upload-tags">
               <span>.ARW</span>
@@ -448,18 +509,18 @@ export default function App() {
               <span>.SRF</span>
             </div>
             <button className="upload-btn-mobile" type="button">
-              点击选择照片
+              选择文件
             </button>
           </div>
         ) : (
-          /* 已有文件时：展示照片网格与快速添加栏 */
+          /* 照片网格展示区 */
           <div className="gallery-section">
             <div className="gallery-header">
               <span className="gallery-count">
                 已导入 {files.length} 张照片 · {doneCount} 张就绪
               </span>
               <span className="gallery-hint">
-                💡 点击照片可放大预览 · 解锁后在 Sony Edit 中直接渲染
+                在 Sony Imaging Edge Edit 中打开导出的 ARW 即可在「创意外观」中选用 FL2 / FL3
               </span>
             </div>
 
@@ -469,15 +530,15 @@ export default function App() {
                   key={item.id}
                   className={`photo-card ${item.status === 'done' ? 'is-done' : ''}`}
                 >
-                  {/* 图片预览区 (内嵌高清 JPEG) */}
+                  {/* 缩略图预览区 */}
                   <div
-                    className="card-thumb-wrap"
+                    className={`card-thumb-wrap ${item.orientationInfo?.isPortrait ? 'is-portrait' : 'is-landscape'}`}
                     onClick={() => {
                       if (item.previewUrl) {
                         setStudioTarget(item);
                       }
                     }}
-                    title="点击进入创意外观实时调色与分屏对比工作室"
+                    title="点击打开调色室"
                   >
                     {item.previewUrl ? (
                       <img
@@ -485,35 +546,60 @@ export default function App() {
                         alt={item.name}
                         className="card-thumb"
                         loading="lazy"
+                        onLoad={(e) => {
+                          if (!item.orientationInfo) {
+                            const detected = detectImageOrientation(e.currentTarget);
+                            setFiles((prev) =>
+                              prev.map((f) =>
+                                f.id === item.id ? { ...f, orientationInfo: detected } : f
+                              )
+                            );
+                          }
+                        }}
                       />
                     ) : (
                       <div className="card-thumb-placeholder">
-                        <Camera size={32} opacity={0.4} />
-                        <span>正在提取预览...</span>
+                        <Camera size={28} opacity={0.35} />
+                        <span>提取内嵌预览...</span>
+                      </div>
+                    )}
+
+                    {/* 画幅朝向与比例角标 (横向/纵向识别) */}
+                    {item.orientationInfo && (
+                      <div
+                        className={`thumb-badge-orientation ${item.orientationInfo.isPortrait ? 'badge-portrait' : 'badge-landscape'}`}
+                        title={`画面方向: ${item.orientationInfo.label} (${item.orientationInfo.ratioTag || ''})`}
+                      >
+                        {item.orientationInfo.isPortrait ? (
+                          <RectangleVertical size={11} />
+                        ) : (
+                          <RectangleHorizontal size={11} />
+                        )}
+                        <span>{item.orientationInfo.label} {item.orientationInfo.ratioTag}</span>
                       </div>
                     )}
 
                     {/* 相机型号与拍摄外观角标 */}
                     {item.info && (
-                      <div className="thumb-badges">
+                      <div className="thumb-badges-meta">
                         <span className="badge-model">{item.info.cameraModel}</span>
                         <span className="badge-look">{item.info.activeLook}</span>
                       </div>
                     )}
 
-                    {/* 调色工作室微标 */}
+                    {/* 调色室入口按钮 */}
                     {item.previewUrl && (
-                      <div className="thumb-studio-tag" title="点击打开创意外观调色工作室">
-                        <Sparkles size={12} />
-                        <span>实时调色</span>
+                      <div className="thumb-studio-tag" title="打开调色室预览">
+                        <Palette size={11} />
+                        <span>外观调色</span>
                       </div>
                     )}
 
-                    {/* 状态悬浮浮层 */}
+                    {/* 完成状态覆盖层 */}
                     {item.status === 'done' && (
                       <div className="thumb-status-done">
-                        <Check size={16} />
-                        <span>已注入全套外观</span>
+                        <Check size={14} />
+                        <span>外观已就绪</span>
                       </div>
                     )}
                   </div>
@@ -534,9 +620,10 @@ export default function App() {
                         <button
                           className="btn-icon btn-studio"
                           onClick={() => setStudioTarget(item)}
-                          title="🎨 创意外观调色工作室 (实时渲染与切换)"
+                          title="创意外观暗房调色"
+                          aria-label="创意外观暗房调色"
                         >
-                          <Palette size={15} />
+                          <Palette size={14} />
                         </button>
                       )}
 
@@ -545,27 +632,38 @@ export default function App() {
                           className="btn-icon"
                           onClick={() => setInspectTarget(item)}
                           title="查看槽位元数据"
+                          aria-label="查看槽位元数据"
                         >
-                          <Eye size={15} />
+                          <Eye size={14} />
                         </button>
                       )}
 
                       <button
+                        className="btn-icon"
+                        onClick={() => handleToggleOrientation(item.id)}
+                        title="切换画幅方向 (横向 / 纵向)"
+                        aria-label="切换画幅方向"
+                      >
+                        <RotateCw size={13} />
+                      </button>
+
+                      <button
                         className="btn-icon btn-danger"
                         onClick={() => handleRemoveFile(item.id)}
-                        title="移除照片"
+                        title="从列表中移除"
+                        aria-label="移除文件"
                       >
-                        <Trash2 size={15} />
+                        <Trash2 size={14} />
                       </button>
 
                       {item.status === 'done' ? (
                         <button
                           className="btn-card-save"
                           onClick={() => handleDownloadSingle(item)}
-                          title="保存解锁后的 ARW"
+                          title="导出处理后的 ARW"
                         >
-                          <Download size={14} />
-                          保存
+                          <Download size={13} />
+                          导出
                         </button>
                       ) : (
                         <button
@@ -574,11 +672,11 @@ export default function App() {
                           disabled={item.status === 'processing' || isProcessingAll}
                         >
                           {item.status === 'processing' ? (
-                            <RefreshCw size={14} className="spin" />
+                            <RefreshCw size={13} className="spin" />
                           ) : (
-                            <Sparkles size={14} />
+                            <CheckCircle2 size={13} />
                           )}
-                          解锁
+                          注入
                         </button>
                       )}
                     </div>
@@ -590,7 +688,7 @@ export default function App() {
         )}
       </main>
 
-      {/* 手机端固定底部操作栏 (Sticky Bottom Bar) */}
+      {/* 手机端吸底固定操作栏 (Sticky Bottom Bar) */}
       {files.length > 0 && (
         <div className="mobile-bottom-bar">
           <div className="mobile-count-info">
@@ -603,8 +701,8 @@ export default function App() {
                 className="mobile-btn mobile-download-btn"
                 onClick={handleDownloadAllZip}
               >
-                <Archive size={16} />
-                下载 ZIP
+                <Archive size={15} />
+                导出 ZIP
               </button>
             )}
 
@@ -615,13 +713,13 @@ export default function App() {
             >
               {isProcessingAll ? (
                 <>
-                  <RefreshCw size={16} className="spin" />
+                  <RefreshCw size={15} className="spin" />
                   处理中...
                 </>
               ) : (
                 <>
-                  <Sparkles size={16} />
-                  一键解锁全部
+                  <CheckCircle2 size={15} />
+                  批量处理全部
                 </>
               )}
             </button>
@@ -638,8 +736,9 @@ export default function App() {
               <button
                 className="lightbox-close"
                 onClick={() => setLightboxImg(null)}
+                aria-label="关闭预览"
               >
-                <X size={20} />
+                <X size={18} />
               </button>
             </div>
             <div className="lightbox-body">
@@ -655,11 +754,11 @@ export default function App() {
           <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
               <div className="modal-title">
-                <Camera size={18} />
+                <Camera size={16} />
                 <h3>ARW 创意外观槽位结构</h3>
               </div>
-              <button className="btn-close" onClick={() => setInspectTarget(null)}>
-                <X size={18} />
+              <button className="btn-close" onClick={() => setInspectTarget(null)} aria-label="关闭">
+                <X size={16} />
               </button>
             </div>
 
@@ -673,13 +772,17 @@ export default function App() {
                 <span className="info-v">{inspectTarget.info.activeLook}</span>
               </div>
               <div className="info-cell">
-                <span className="info-k">SR2 偏移</span>
-                <span className="info-v font-mono">{inspectTarget.info.sr2Offset}</span>
+                <span className="info-k">画面方向</span>
+                <span className="info-v">
+                  {inspectTarget.orientationInfo
+                    ? `${inspectTarget.orientationInfo.label} (${inspectTarget.orientationInfo.ratioTag || ''})`
+                    : '未识别'}
+                </span>
               </div>
               <div className="info-cell">
-                <span className="info-k">状态</span>
-                <span className="info-v" style={{ color: '#10b981' }}>
-                  {inspectTarget.info.isFullyUnlocked ? '已注入 FL2/FL3' : '原始状态'}
+                <span className="info-k">槽位状态</span>
+                <span className="info-v" style={{ color: 'var(--status-success)' }}>
+                  {inspectTarget.info.isFullyUnlocked ? '已注入 FL2/FL3' : '原机状态'}
                 </span>
               </div>
             </div>
@@ -689,7 +792,7 @@ export default function App() {
                 <thead>
                   <tr>
                     <th>槽位</th>
-                    <th>外观</th>
+                    <th>外观代码</th>
                     <th>状态</th>
                   </tr>
                 </thead>
@@ -704,7 +807,7 @@ export default function App() {
                               s.name === 'FL2'
                                 ? 'var(--sony-orange)'
                                 : s.name === 'FL3'
-                                ? 'var(--film-teal)'
+                                ? 'var(--accent-teal)'
                                 : 'inherit',
                           }}
                         >
@@ -721,51 +824,52 @@ export default function App() {
         </div>
       )}
 
-      {/* 帮助与说明浮层 */}
+      {/* 技术说明与指引弹窗 */}
       {showHelp && (
         <div className="modal-overlay" onClick={() => setShowHelp(false)}>
           <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
               <div className="modal-title">
-                <Sliders size={18} />
-                <h3>使用说明与色彩方案</h3>
+                <Sliders size={16} />
+                <h3>技术说明与使用指引</h3>
               </div>
-              <button className="btn-close" onClick={() => setShowHelp(false)}>
-                <X size={18} />
+              <button className="btn-close" onClick={() => setShowHelp(false)} aria-label="关闭">
+                <X size={16} />
               </button>
             </div>
 
             <div className="help-content">
               <div className="help-section">
-                <h4>✨ 调色与色温优化</h4>
+                <h4>色彩调校与白平衡校准</h4>
                 <p>
-                  <strong>自动 -400K 色温优化 (默认开启)</strong>：由于索尼原厂 FL2 与 FL3 胶片矩阵整体倾向偏暖，在室内拍摄容易显得偏黄、白墙发暖。工具在 RAW 层面直接对红蓝增益进行 -400K 补偿，使人像肤色通透白皙，白底纯净自然，无需在 Sony Edit 中手动拉低色温！
+                  <strong>-400K 色温补偿 (推荐开启)</strong>：由于索尼原厂 FL2 与 FL3 胶片矩阵整体倾向偏暖，室内及白底环境容易泛黄。工具在 RAW 层面直接对红蓝增益进行补偿，使人像肤色通透自然。
                 </p>
-                <p style={{ marginTop: '8px' }}>
-                  <strong>通透平衡版 vs 原厂浓郁版</strong>：通透平衡版重归一化了白平衡色彩矩阵，兼具胶片反差与健康肤色；原厂版则保留高暖调。
+                <p style={{ marginTop: '6px' }}>
+                  <strong>通透平衡校准 vs 原厂高暖色彩</strong>：通透平衡校准重归一化了白平衡色彩矩阵，兼具胶片反差与健康肤色；原厂版则保持高暖胶片特性。
                 </p>
               </div>
 
               <div className="help-section">
-                <h4>🖥️ 渲染步骤</h4>
+                <h4>后期渲染工作流</h4>
                 <ol style={{ paddingLeft: '18px', lineHeight: '1.8' }}>
-                  <li>在此工具一键解锁并下载 ARW 照片。</li>
-                  <li>使用官方 <strong>Sony Imaging Edge Desktop (Edit)</strong> 打开。</li>
-                  <li>在右侧「创意外观」下拉菜单中自由切换 FL2、FL3 或任意风格。</li>
+                  <li>在此工具中注入外观并导出 ARW 文件。</li>
+                  <li>使用官方 <strong>Sony Imaging Edge Desktop (Edit)</strong> 打开导出的 ARW。</li>
+                  <li>在右侧「创意外观」下拉菜单中自由选用 FL2、FL3 或任意风格。</li>
                 </ol>
               </div>
 
               <div className="help-section">
-                <h4>🔒 纯本地安全</h4>
+                <h4>本地内存处理</h4>
                 <p>
-                  所有运算完全在您的手机或电脑浏览器本地内存中执行，无文件上传，断网亦可正常工作。
+                  所有运算完全在您的设备浏览器本地内存中执行，无任何文件上传至外部服务器，断网亦可正常使用。
                 </p>
               </div>
             </div>
           </div>
         </div>
       )}
-      {/* 索尼创意外观实时调色与分屏对比工作室 */}
+
+      {/* 索尼创意外观调色暗房 */}
       {studioTarget && (
         <LookStudioModal
           photoItem={studioTarget}

@@ -6,7 +6,6 @@ import {
   Sliders,
   Columns,
   Eye,
-  Sparkles,
   Sun,
   Contrast,
   Palette,
@@ -14,7 +13,9 @@ import {
   Layers,
   ZoomIn,
   ZoomOut,
-  Maximize2
+  Maximize2,
+  CheckCircle2,
+  Layers2
 } from 'lucide-react';
 import { SONY_CREATIVE_LOOKS, SonyColorRenderer } from '../core/sonyColorEngine';
 import { extractFullResJpegFromArw, createJpegObjectUrl } from '../core/previewExtractor';
@@ -33,7 +34,7 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
   const [contrast, setContrast] = useState(0.0);
   const [highlights, setHighlights] = useState(0.0);
   const [shadows, setShadows] = useState(0.0);
-  const [wbOffset, setWbOffset] = useState(0); // 默认 0 (纯净索尼原厂基准)
+  const [wbOffset, setWbOffset] = useState(0); // 默认 0 (索尼基准)
   const [tint, setTint] = useState(0.0);
   const [saturation, setSaturation] = useState(1.0);
 
@@ -50,7 +51,7 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
   const [isRawMode, setIsRawMode] = useState(false);
   const [isDecodingRaw, setIsDecodingRaw] = useState(false);
 
-  // 异步探测全画幅原始分辨率
+  // 探测全画幅原始分辨率
   useEffect(() => {
     let cancelled = false;
     async function checkFullRes() {
@@ -60,7 +61,7 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
           if (!cancelled && info && info.width && info.height) {
             setFullResDims({ width: info.width, height: info.height });
           }
-        } catch (e) {
+        } catch {
           // ignore
         }
       }
@@ -104,7 +105,7 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
     isHoldingOriginal,
   ]);
 
-  // 初始化 WebGL 渲染引擎并自动加载 14-bit 原厂 RAW 底片
+  // 初始化 WebGL 渲染引擎
   useEffect(() => {
     if (!canvasRef.current || !photoItem) return;
 
@@ -112,7 +113,6 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
     const renderer = new SonyColorRenderer(canvasRef.current);
     rendererRef.current = renderer;
 
-    // 1. 先用内嵌预览图极速秒开 (10ms 内首屏响应)
     if (photoItem.previewUrl) {
       const img = new Image();
       img.crossOrigin = 'anonymous';
@@ -128,7 +128,6 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
       };
     }
 
-    // 2. 同时自动启动 14-bit 真实 RAW 拜耳解码 (秒级完成无缝注入，100% 官方色彩还原)
     if (photoItem.file) {
       setIsDecodingRaw(true);
       const decoder = new SonyRawDecoder();
@@ -146,63 +145,90 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
         renderer.setImage(canvas);
         setIsRawMode(true);
         setIsDecodingRaw(false);
-        // 确保 LUT 已就绪后渲染
         await renderer.loadLut(selectedLook, import.meta.env.BASE_URL.replace(/\/$/, ''));
-        if (!cancelled) triggerRender({ look: selectedLook });
-      }).catch((err) => {
-        console.warn('自动 RAW 拜耳解码异常，继续保留预览图:', err);
+        if (cancelled) return;
+        triggerRender();
+      }).catch((e) => {
+        console.warn('RAW 解码退回内嵌预览:', e);
         if (!cancelled) setIsDecodingRaw(false);
       });
     }
 
     return () => {
       cancelled = true;
-      renderer.destroy();
+      if (typeof renderer.destroy === 'function') {
+        renderer.destroy();
+      } else if (typeof renderer.dispose === 'function') {
+        renderer.dispose();
+      }
       rendererRef.current = null;
     };
-  }, [photoItem?.previewUrl, photoItem?.file]);
+  }, [photoItem]);
 
-  // 参数改变时重绘
+  // 当调色参数变化时触发重绘
   useEffect(() => {
     triggerRender();
-  }, [triggerRender]);
+  }, [
+    lutIntensity,
+    exposure,
+    contrast,
+    highlights,
+    shadows,
+    wbOffset,
+    tint,
+    saturation,
+    splitMode,
+    splitRatio,
+    isHoldingOriginal,
+    triggerRender,
+  ]);
 
   // 切换创意外观
   const handleSelectLook = async (lookKey) => {
+    if (selectedLook === lookKey || !rendererRef.current) return;
     setSelectedLook(lookKey);
-    if (rendererRef.current) {
-      setIsLoadingLut(true);
-      await rendererRef.current.loadLut(lookKey, import.meta.env.BASE_URL.replace(/\/$/, ''));
+    setIsLoadingLut(true);
+
+    try {
+      const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
+      await rendererRef.current.loadLut(lookKey, basePath);
+    } catch (e) {
+      console.warn('LUT 加载提示:', e);
+    } finally {
       setIsLoadingLut(false);
       triggerRender({ look: lookKey });
     }
   };
 
-  // 分屏滑块拖拽逻辑
-  const handlePointerDown = (e) => {
-    if (splitMode !== 1) return;
-    setIsDraggingSplit(true);
-    updateSplitRatio(e);
-  };
-
-  const handlePointerMove = (e) => {
-    if (!isDraggingSplit || splitMode !== 1) return;
-    updateSplitRatio(e);
-  };
-
-  const handlePointerUp = () => {
-    setIsDraggingSplit(false);
-  };
-
-  const updateSplitRatio = (e) => {
+  // 分屏滑块拖拽逻辑 (支持触控和鼠标)
+  const updateSplitRatioFromClientX = (clientX) => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
-    const x = e.clientX - rect.left;
+    const x = clientX - rect.left;
     const ratio = Math.max(0.01, Math.min(0.99, x / rect.width));
     setSplitRatio(ratio);
   };
 
-  // 重置所有调色参数
+  const handlePointerDown = (e) => {
+    if (splitMode !== 1) return;
+    setIsDraggingSplit(true);
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    updateSplitRatioFromClientX(e.clientX);
+  };
+
+  const handlePointerMove = (e) => {
+    if (!isDraggingSplit || splitMode !== 1) return;
+    updateSplitRatioFromClientX(e.clientX);
+  };
+
+  const handlePointerUp = (e) => {
+    setIsDraggingSplit(false);
+    try {
+      e.currentTarget.releasePointerCapture?.(e.pointerId);
+    } catch {}
+  };
+
+  // 重置调色参数
   const handleResetParams = () => {
     setExposure(0.0);
     setContrast(0.0);
@@ -214,7 +240,7 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
     setLutIntensity(1.0);
   };
 
-  // 切换为真实 RAW 拜耳去马赛克实时预览
+  // 切换 RAW 拜耳模式
   const handleToggleRawMode = async () => {
     if (isDecodingRaw || !photoItem?.file || !rendererRef.current) return;
 
@@ -222,7 +248,6 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
       setIsDecodingRaw(true);
       try {
         const decoder = new SonyRawDecoder();
-        // 快速交互预览使用半分辨率解码，毫秒级完成
         const decoded = await decoder.decode(photoItem.file, {
           halfSize: true,
         });
@@ -244,7 +269,6 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
         setIsDecodingRaw(false);
       }
     } else {
-      // 切回内嵌预览
       const img = new Image();
       img.crossOrigin = 'anonymous';
       img.src = photoItem.previewUrl;
@@ -256,7 +280,7 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
     }
   };
 
-  // 导出全画幅超高清 (100% 还原官方 Imaging Edge Edit 的真实 RAW 拜耳解码)
+  // 导出高质量 JPEG
   const handleExportJpeg = async () => {
     if (isExporting) return;
     setIsExporting(true);
@@ -264,11 +288,9 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
     try {
       const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
       let sourceImg = null;
-      let isTrueRaw = false;
 
-      // 1. 优先采用 14-bit 原厂 RAW 拜耳解码引擎 (FlashRaw 极速 WASM 去马赛克 + 相机拍摄白平衡)
       if (photoItem?.file) {
-        setExportProgress('正在执行 14-bit 原厂拜耳去马赛克解码 (FlashRaw SIMD)...');
+        setExportProgress('正在执行 14-bit 原厂拜耳去马赛克解码...');
         try {
           const decoder = new SonyRawDecoder();
           const decoded = await decoder.decode(photoItem.file, {
@@ -277,23 +299,21 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
           decoder.dispose();
 
           if (decoded && decoded.imageData) {
-            setExportProgress(`正在 WebGL GPU 渲染 ${decoded.width}×${decoded.height} 原厂底片...`);
+            setExportProgress(`正在渲染 ${decoded.width}×${decoded.height} 原片...`);
             const canvas = document.createElement('canvas');
             canvas.width = decoded.width;
             canvas.height = decoded.height;
             const ctx = canvas.getContext('2d');
             ctx.putImageData(decoded.imageData, 0, 0);
             sourceImg = canvas;
-            isTrueRaw = true;
           }
         } catch (rawErr) {
-          console.warn('WASM RAW 解码异常，降级到原底提取:', rawErr);
+          console.warn('RAW 解码降级为原底提取:', rawErr);
         }
       }
 
-      // 2. 降级回退：全画幅内嵌原底
       if (!sourceImg && photoItem?.file) {
-        setExportProgress('正在提取机身全画幅底片...');
+        setExportProgress('正在读取内嵌全分辨率底片...');
         const fullResInfo = await extractFullResJpegFromArw(photoItem.file);
         if (fullResInfo && fullResInfo.bytes) {
           const blobUrl = createJpegObjectUrl(fullResInfo.bytes);
@@ -305,9 +325,8 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
         }
       }
 
-      // 3. 最终保底：预览图
       if (!sourceImg) {
-        setExportProgress('正在高画质渲染导出照片...');
+        setExportProgress('正在渲染导出照片...');
         const previewImg = new Image();
         previewImg.crossOrigin = 'anonymous';
         previewImg.src = photoItem.previewUrl;
@@ -334,7 +353,6 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
         quality: 0.96,
       });
 
-      // 触发下载
       const baseName = photoItem.name.replace(/\.[^/.]+$/, '');
       const downloadUrl = URL.createObjectURL(resultBlob);
       const a = document.createElement('a');
@@ -348,20 +366,20 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
       document.body.removeChild(a);
       URL.revokeObjectURL(downloadUrl);
 
-      setExportProgress('导出成功！已保存到本地');
+      setExportProgress('导出完成');
       setTimeout(() => {
         setIsExporting(false);
         setExportProgress('');
-      }, 1800);
+      }, 1500);
     } catch (err) {
       console.error('导出失败:', err);
-      alert('导出全高清照片失败: ' + err.message);
+      alert('导出照片失败: ' + err.message);
       setIsExporting(false);
       setExportProgress('');
     }
   };
 
-  // 直接将当前外观注入 ARW 并保存
+  // 直接将当前外观写入 ARW 并保存
   const handleApplyToArw = () => {
     if (onApplyToArw) {
       onApplyToArw(photoItem, selectedLook.toLowerCase(), wbOffset);
@@ -377,8 +395,13 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
         {/* 顶部工具栏 */}
         <div className="studio-header">
           <div className="studio-title-group">
-            <span className="studio-badge">Sony Creative Look Studio</span>
+            <span className="studio-badge">RAW 外观调色暗房</span>
             <span className="studio-filename">{photoItem.name}</span>
+            {photoItem.orientationInfo && (
+              <span className="studio-orient-tag">
+                {photoItem.orientationInfo.label} {photoItem.orientationInfo.ratioTag}
+              </span>
+            )}
           </div>
 
           <div className="studio-top-actions">
@@ -387,17 +410,17 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
               <button
                 className={`view-btn ${splitMode === 0 ? 'active' : ''}`}
                 onClick={() => setSplitMode(0)}
-                title="单图预览"
+                title="单图视图"
               >
                 单图
               </button>
               <button
                 className={`view-btn ${splitMode === 1 ? 'active' : ''}`}
                 onClick={() => setSplitMode(1)}
-                title="左右分屏实时对比 (可拖拽中线)"
+                title="分屏对比 (拖拽中线)"
               >
-                <Columns size={14} />
-                左右分屏
+                <Columns size={13} />
+                分屏
               </button>
               <button
                 className="view-btn hold-btn"
@@ -405,37 +428,37 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
                 onMouseUp={() => setIsHoldingOriginal(false)}
                 onTouchStart={() => setIsHoldingOriginal(true)}
                 onTouchEnd={() => setIsHoldingOriginal(false)}
-                title="按住临时查看拍摄原图"
+                title="按住查看拍摄原图"
               >
-                <Eye size={14} />
-                按住看原图
+                <Eye size={13} />
+                原图
               </button>
             </div>
 
-            {/* 真实 RAW 拜耳解码模式切换 */}
+            {/* RAW 拜耳解码模式切换 */}
             {photoItem?.file && (
               <button
                 className={`view-btn raw-mode-btn ${isRawMode ? 'active-raw' : ''}`}
                 onClick={handleToggleRawMode}
                 disabled={isDecodingRaw}
-                title="切换为 100% 官方 FlashRaw 拜耳去马赛克原片底片，彻底脱离机内色彩模式"
+                title="切换 14-bit RAW 拜耳解码数据"
               >
                 {isDecodingRaw ? (
                   <>
                     <span className="spinner-mini" />
-                    <span>解码 RAW 拜耳中...</span>
+                    <span>解码中...</span>
                   </>
                 ) : (
                   <>
-                    <Sparkles size={13} />
-                    <span>{isRawMode ? '✅ 已切为原厂 RAW 拜耳底片' : '🔬 切换原厂 RAW 拜耳解码'}</span>
+                    <Layers2 size={13} />
+                    <span>{isRawMode ? '14-bit RAW 已就绪' : 'RAW 拜耳解码'}</span>
                   </>
                 )}
               </button>
             )}
 
-            <button className="studio-btn-close" onClick={onClose} title="关闭工作室">
-              <X size={20} />
+            <button className="studio-btn-close" onClick={onClose} title="关闭暗房" aria-label="关闭">
+              <X size={18} />
             </button>
           </div>
         </div>
@@ -448,9 +471,10 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
             ref={containerRef}
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
+            style={{ touchAction: 'none' }}
           >
             <div
-              className="canvas-wrapper"
+              className={`canvas-wrapper ${photoItem.orientationInfo?.isPortrait ? 'wrapper-portrait' : 'wrapper-landscape'}`}
               style={{
                 transform: `scale(${zoomLevel})`,
                 transformOrigin: 'center center',
@@ -475,7 +499,7 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
                 <div className="split-labels">
                   <div className="label-box label-left">拍摄原图</div>
                   <div className="label-box label-right">
-                    {currentLookInfo.name} · 原厂色彩
+                    {currentLookInfo.name} · 色彩校准
                   </div>
                 </div>
               )}
@@ -487,34 +511,37 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
                 className="vp-btn"
                 onClick={() => setZoomLevel((z) => Math.min(2.5, z + 0.25))}
                 title="放大"
+                aria-label="放大"
               >
-                <ZoomIn size={16} />
+                <ZoomIn size={15} />
               </button>
               <span className="vp-zoom-text">{Math.round(zoomLevel * 100)}%</span>
               <button
                 className="vp-btn"
                 onClick={() => setZoomLevel((z) => Math.max(0.5, z - 0.25))}
                 title="缩小"
+                aria-label="缩小"
               >
-                <ZoomOut size={16} />
+                <ZoomOut size={15} />
               </button>
               <button
                 className="vp-btn"
                 onClick={() => setZoomLevel(1.0)}
-                title="适应画布"
+                title="适应视口"
+                aria-label="适应视口"
               >
-                <Maximize2 size={15} />
+                <Maximize2 size={14} />
               </button>
             </div>
           </div>
 
-          {/* 右侧索尼调色控制面板 (Edit.app 布局) */}
+          {/* 右侧参数控制面板 */}
           <div className="studio-sidebar">
-            {/* 创意外观选择网格 */}
+            {/* 创意外观网格 */}
             <div className="panel-section">
               <div className="section-head">
                 <div className="section-title">
-                  <Palette size={16} />
+                  <Palette size={15} />
                   <span>创意外观 (Creative Look)</span>
                 </div>
                 {isLoadingLut && <span className="loading-tag">加载 3D-LUT...</span>}
@@ -531,11 +558,7 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
                     >
                       <div className="tile-top">
                         <span className="tile-key">{look.key}</span>
-                        {look.badge.includes('⚡') ? (
-                          <span className="tile-badge badge-glow">FL2/3</span>
-                        ) : (
-                          <span className="tile-badge">{look.badge}</span>
-                        )}
+                        <span className="tile-badge">{look.badge.replace(/[⚡✨]/g, '') || look.key}</span>
                       </div>
                       <div className="tile-name">{look.title}</div>
                     </button>
@@ -552,19 +575,19 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
               </div>
             </div>
 
-            {/* 胶片浓度与色彩优化 */}
+            {/* 胶片浓度与色温校正 */}
             <div className="panel-section">
               <div className="section-head">
                 <div className="section-title">
-                  <Layers size={16} />
-                  <span>3D-LUT 胶片强度与色温微调</span>
+                  <Layers size={15} />
+                  <span>3D-LUT 强度与色温微调</span>
                 </div>
                 <button
                   className="btn-reset-mini"
                   onClick={handleResetParams}
                   title="重置所有参数"
                 >
-                  <RotateCcw size={12} />
+                  <RotateCcw size={11} />
                   重置
                 </button>
               </div>
@@ -572,7 +595,7 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
               {/* 3D-LUT 浓度 */}
               <div className="slider-item">
                 <div className="slider-label-row">
-                  <span>胶片 3D-LUT 强度</span>
+                  <span>3D-LUT 强度</span>
                   <span className="slider-val">{Math.round(lutIntensity * 100)}%</span>
                 </div>
                 <input
@@ -585,11 +608,11 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
                 />
               </div>
 
-              {/* 色温微调 (带 -400K 一键去黄通透预设) */}
+              {/* 色温微调 */}
               <div className="slider-item">
                 <div className="slider-label-row">
                   <span className="flex-row">
-                    <Thermometer size={14} />
+                    <Thermometer size={13} />
                     色温偏移 (WB Offset)
                   </span>
                   <span className="slider-val">
@@ -608,31 +631,31 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
                   <button
                     className={`wb-pill ${wbOffset === -400 ? 'active' : ''}`}
                     onClick={() => setWbOffset(-400)}
-                    title="索尼官方 FL2/FL3 最佳伴侣：修正室内偏黄白底"
+                    title="-400K 通透白皙校准"
                   >
-                    ✨ -400K 去黄通透 (推荐)
+                    -400K (通透校正 / 推荐)
                   </button>
                   <button
                     className={`wb-pill ${wbOffset === -200 ? 'active' : ''}`}
                     onClick={() => setWbOffset(-200)}
                   >
-                    -200K 微冷
+                    -200K (自然微冷)
                   </button>
                   <button
                     className={`wb-pill ${wbOffset === 0 ? 'active' : ''}`}
                     onClick={() => setWbOffset(0)}
                   >
-                    0K 拍摄原片
+                    0K (原片色温)
                   </button>
                 </div>
               </div>
             </div>
 
-            {/* 基础影调调节 (曝光/对比/高光/阴影) */}
+            {/* 基础影调调节 */}
             <div className="panel-section">
               <div className="section-head">
                 <div className="section-title">
-                  <Sliders size={16} />
+                  <Sliders size={15} />
                   <span>影调与色彩微调 (Tone & Color)</span>
                 </div>
               </div>
@@ -641,7 +664,7 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
               <div className="slider-item">
                 <div className="slider-label-row">
                   <span className="flex-row">
-                    <Sun size={14} />
+                    <Sun size={13} />
                     曝光补偿 (Exposure)
                   </span>
                   <span className="slider-val">
@@ -662,7 +685,7 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
               <div className="slider-item">
                 <div className="slider-label-row">
                   <span className="flex-row">
-                    <Contrast size={14} />
+                    <Contrast size={13} />
                     对比度 (Contrast)
                   </span>
                   <span className="slider-val">{contrast > 0 ? `+${contrast}` : contrast}</span>
@@ -680,7 +703,7 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
               {/* 高光 */}
               <div className="slider-item">
                 <div className="slider-label-row">
-                  <span>高光抑制 / 提亮</span>
+                  <span>高光压制 / 提亮</span>
                   <span className="slider-val">{highlights > 0 ? `+${highlights}` : highlights}</span>
                 </div>
                 <input
@@ -732,7 +755,7 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
                 className="studio-btn studio-btn-export"
                 onClick={() => handleExportJpeg('full')}
                 disabled={isExporting}
-                title="导出相机原生全画幅 3300万/6100万像素高保真 JPEG，告别第三方 RAW 编辑器"
+                title="导出高分辨率渲染 JPEG 文件"
               >
                 {isExporting ? (
                   <>
@@ -741,15 +764,15 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
                   </>
                 ) : (
                   <>
-                    <Download size={18} />
+                    <Download size={16} />
                     <div className="btn-text-col">
                       <span className="btn-main-text">
                         {fullResDims
-                          ? `导出超高清原底 (${fullResDims.width}×${fullResDims.height})`
-                          : '导出全高清超清原底 (JPG)'}
+                          ? `导出高分辨率照片 (${fullResDims.width}×${fullResDims.height})`
+                          : '导出高分辨率渲染图 (JPG)'}
                       </span>
                       <span className="btn-sub-text">
-                        原生画质 · 索尼官方色彩科学
+                        全画幅色彩渲染 · 3D-LUT 矩阵
                       </span>
                     </div>
                   </>
@@ -760,10 +783,10 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
                 className="studio-btn studio-btn-apply"
                 onClick={handleApplyToArw}
                 disabled={isExporting}
-                title="以此创意外观作为默认外观，直接注入并解锁 ARW 文件"
+                title="将当前外观预设直接写入 ARW 文件"
               >
-                <Sparkles size={16} />
-                <span>以此外观注入并保存 RAW</span>
+                <CheckCircle2 size={16} />
+                <span>将此外观写入并导出 ARW</span>
               </button>
             </div>
           </div>
