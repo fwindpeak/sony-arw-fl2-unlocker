@@ -356,9 +356,6 @@ export function extractEmbeddedJpeg(buf) {
 
       if (end > pos) {
         const jpegLen = end + 2 - pos;
-        if (jpegLen >= 50 * 1024 && jpegLen <= 2.5 * 1024 * 1024) {
-          return buf.subarray(pos, end + 2);
-        }
         if (jpegLen > bestLen) {
           bestLen = jpegLen;
           bestJpeg = buf.subarray(pos, end + 2);
@@ -375,75 +372,99 @@ export function extractEmbeddedJpeg(buf) {
 
 /**
  * 完整提取预览图与方向元数据
+ * 优先提取 ARW 内部全尺寸高清/全像素内嵌 JPEG (如 7008x4672，几兆大小)
+ * 同时提供轻量预览 bytes 供网页极速流畅渲染
  * @param {File | Blob | ArrayBuffer | Uint8Array} fileOrBuffer
- * @returns {Promise<{ bytes: Uint8Array | null, orientationInfo: ReturnType<typeof computeOrientationInfo> }>}
+ * @returns {Promise<{ bytes: Uint8Array | null, hdBytes: Uint8Array | null, previewBytes: Uint8Array | null, orientationInfo: ReturnType<typeof computeOrientationInfo> }>}
  */
 export async function extractPreviewWithInfo(fileOrBuffer) {
   try {
     let headerBuf;
+    // 扩展前置元数据扫描范围至 1.5MB，确保完整覆盖 IFD0、IFD1 与 IFD2 (全像素大图通常在 IFD2)
+    const scanSize = 1536 * 1024;
     if (fileOrBuffer instanceof Blob || (typeof File !== 'undefined' && fileOrBuffer instanceof File)) {
-      const slice = fileOrBuffer.slice(0, 512 * 1024);
+      const slice = fileOrBuffer.slice(0, Math.min(fileOrBuffer.size || scanSize, scanSize));
       headerBuf = new Uint8Array(await slice.arrayBuffer());
     } else if (fileOrBuffer instanceof ArrayBuffer) {
-      headerBuf = new Uint8Array(fileOrBuffer.slice(0, Math.min(fileOrBuffer.byteLength, 512 * 1024)));
+      headerBuf = new Uint8Array(fileOrBuffer.slice(0, Math.min(fileOrBuffer.byteLength, scanSize)));
     } else if (fileOrBuffer instanceof Uint8Array) {
-      headerBuf = fileOrBuffer.subarray(0, Math.min(fileOrBuffer.length, 512 * 1024));
+      headerBuf = fileOrBuffer.subarray(0, Math.min(fileOrBuffer.length, scanSize));
     } else {
-      return { bytes: null, orientationInfo: computeOrientationInfo(0, 0, 1) };
+      return { bytes: null, hdBytes: null, previewBytes: null, orientationInfo: computeOrientationInfo(0, 0, 1) };
     }
 
     const { jpegs, orientation: tiffOrientation } = parseTiffMetadata(headerBuf);
-    let previewBytes = null;
+    let hdBytes = null;
+    let mediumBytes = null;
     let width = 0;
     let height = 0;
 
     if (jpegs.length > 0) {
-      const previewJpegs = jpegs.filter(
-        (j) => j.length >= 50 * 1024 && (j.width < 2500 || j.length < 1.5 * 1024 * 1024)
-      );
-      if (previewJpegs.length > 0) {
-        previewJpegs.sort((a, b) => b.length - a.length);
-        const target = previewJpegs[0];
-        width = target.width;
-        height = target.height;
+      // 1. 选取全像素高清 JPEG 槽位 (按 byte length 降序排序，取最大的一张，通常为 1.5MB~5MB)
+      const sortedJpegs = [...jpegs].sort((a, b) => b.length - a.length);
+      const hdTarget = sortedJpegs[0];
+
+      // 2. 选取中等尺寸轻量预览槽位 (100KB~1.5MB)，用于快速列表渲染防卡顿
+      const mediumTarget = jpegs.find((j) => j.length >= 50 * 1024 && j.length < 1.5 * 1024 * 1024) || hdTarget;
+
+      const extractBytesFromTarget = async (tgt) => {
+        if (!tgt) return null;
         if (fileOrBuffer instanceof Blob || (typeof File !== 'undefined' && fileOrBuffer instanceof File)) {
-          const slice = fileOrBuffer.slice(target.offset, target.offset + target.length);
-          previewBytes = new Uint8Array(await slice.arrayBuffer());
+          const slice = fileOrBuffer.slice(tgt.offset, tgt.offset + tgt.length);
+          return new Uint8Array(await slice.arrayBuffer());
         } else if (fileOrBuffer instanceof ArrayBuffer) {
-          previewBytes = new Uint8Array(fileOrBuffer, target.offset, target.length);
+          return new Uint8Array(fileOrBuffer, tgt.offset, tgt.length);
         } else if (fileOrBuffer instanceof Uint8Array) {
-          previewBytes = fileOrBuffer.subarray(target.offset, target.offset + target.length);
+          return fileOrBuffer.subarray(tgt.offset, tgt.offset + tgt.length);
         }
-      }
+        return null;
+      };
+
+      const [extractedHd, extractedMed] = await Promise.all([
+        extractBytesFromTarget(hdTarget),
+        hdTarget === mediumTarget ? null : extractBytesFromTarget(mediumTarget),
+      ]);
+
+      hdBytes = extractedHd;
+      mediumBytes = extractedMed || extractedHd;
+      width = hdTarget.width;
+      height = hdTarget.height;
     }
 
-    if (!previewBytes) {
+    if (!hdBytes) {
       let sliceBuf;
       if (fileOrBuffer instanceof Blob || (typeof File !== 'undefined' && fileOrBuffer instanceof File)) {
-        const slice = fileOrBuffer.slice(0, 4 * 1024 * 1024);
+        const slice = fileOrBuffer.slice(0, Math.min(fileOrBuffer.size || 8 * 1024 * 1024, 8 * 1024 * 1024));
         sliceBuf = new Uint8Array(await slice.arrayBuffer());
       } else {
         sliceBuf = headerBuf;
       }
-      previewBytes = extractEmbeddedJpeg(sliceBuf);
+      hdBytes = extractEmbeddedJpeg(sliceBuf);
+      mediumBytes = hdBytes;
     }
 
+    const previewForOrient = mediumBytes || hdBytes;
     let finalOrientation = tiffOrientation || 1;
-    if (previewBytes) {
-      const jpegOrientation = getJpegExifOrientation(previewBytes);
+    if (previewForOrient) {
+      const jpegOrientation = getJpegExifOrientation(previewForOrient);
       if (jpegOrientation > 1) finalOrientation = jpegOrientation;
       if (!width || !height) {
-        const dims = getJpegDimensions(previewBytes);
+        const dims = getJpegDimensions(previewForOrient);
         width = dims.width;
         height = dims.height;
       }
     }
 
     const orientationInfo = computeOrientationInfo(width, height, finalOrientation);
-    return { bytes: previewBytes, orientationInfo };
+    return {
+      bytes: hdBytes, // 最优先：全像素高清内嵌 JPEG (几兆大小)
+      hdBytes,
+      previewBytes: mediumBytes || hdBytes,
+      orientationInfo,
+    };
   } catch (err) {
     console.warn('[previewExtractor] 提取预览与方向异常:', err);
-    return { bytes: null, orientationInfo: computeOrientationInfo(0, 0, 1) };
+    return { bytes: null, hdBytes: null, previewBytes: null, orientationInfo: computeOrientationInfo(0, 0, 1) };
   }
 }
 
@@ -539,4 +560,22 @@ export function createJpegObjectUrl(jpegBytes) {
   if (!jpegBytes || jpegBytes.length === 0) return null;
   const blob = new Blob([jpegBytes], { type: 'image/jpeg' });
   return URL.createObjectURL(blob);
+}
+
+/**
+ * 触发下载 JPEG 字节数组为本地文件
+ * @param {Uint8Array} bytes
+ * @param {string} fileName
+ */
+export function downloadJpegBytes(bytes, fileName = 'preview.jpg') {
+  if (!bytes || bytes.length === 0) return;
+  const blob = new Blob([bytes], { type: 'image/jpeg' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

@@ -213,13 +213,15 @@
   cursor: not-allowed;
 }
 
-.download-all-btn {
+.download-all-btn,
+.extract-all-btn {
   background-color: var(--bg-elevated);
   border-color: var(--border-default);
   color: var(--text-primary);
 }
 
-.download-all-btn:hover {
+.download-all-btn:hover,
+.extract-all-btn:hover {
   background-color: var(--bg-panel-hover);
   border-color: var(--border-strong);
 }
@@ -588,6 +590,15 @@
 .btn-icon.btn-studio:hover {
   background: var(--sony-orange-subtle);
   border-color: var(--sony-orange-border);
+}
+
+.btn-icon.btn-extract-jpg {
+  color: var(--status-success);
+}
+
+.btn-icon.btn-extract-jpg:hover {
+  background: rgba(5, 150, 105, 0.12);
+  border-color: rgba(5, 150, 105, 0.35);
 }
 
 .btn-card-unlock {

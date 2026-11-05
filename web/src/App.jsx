@@ -18,7 +18,8 @@ import {
   RectangleHorizontal,
   RectangleVertical,
   CheckCircle2,
-  RotateCw
+  RotateCw,
+  FileImage
 } from 'lucide-react';
 import JSZip from 'jszip';
 import {
@@ -28,9 +29,11 @@ import {
 import {
   extractPreviewWithInfo,
   createOrientedJpegUrl,
-  computeOrientationInfo,
-  detectImageOrientation
+  createJpegObjectUrl,
+  detectImageOrientation,
+  downloadJpegBytes
 } from './core/previewExtractor';
+import { SonyColorRenderer } from './core/sonyColorEngine';
 import LookStudioModal from './components/LookStudioModal';
 import './App.css';
 
@@ -97,6 +100,8 @@ export default function App() {
 
         let info = null;
         let previewUrl = null;
+        let previewBytes = null;
+        let hdBytes = null;
         let orientationInfo = null;
 
         try {
@@ -108,12 +113,16 @@ export default function App() {
         }
 
         try {
-          // 2. 提取内嵌高清 JPEG 与 EXIF 方向信息，并自动根据 Orientation 纠偏旋转物理像素
+          // 2. 提取内嵌全像素高清 JPEG (几兆) 与 EXIF 方向信息
+          // 同时提取轻量预览用于网页流畅呈现，按 Orientation 纠偏旋转物理像素
           const result = await extractPreviewWithInfo(file);
           orientationInfo = result.orientationInfo;
-          if (result.bytes) {
+          hdBytes = result.hdBytes || result.bytes || null;
+          previewBytes = hdBytes;
+          const displayBytes = result.previewBytes || hdBytes;
+          if (displayBytes) {
             previewUrl = await createOrientedJpegUrl(
-              result.bytes,
+              displayBytes,
               orientationInfo?.exifOrientation || 1
             );
           }
@@ -130,6 +139,8 @@ export default function App() {
           error: null,
           info,
           previewUrl,
+          previewBytes,
+          hdBytes,
           orientationInfo,
           processedBlobUrl: null,
           processedBuffer: null,
@@ -172,11 +183,56 @@ export default function App() {
       const effLook = lookOverride || defaultLook;
       const effWb = wbOverride !== null && wbOverride !== undefined ? Number(wbOverride) : Number(wbOffset);
 
+      let replacementJpegBytes = null;
+      let newPreviewUrl = null;
+
+      // 渲染带有新创意外观色彩的内嵌全尺寸高清 JPEG 并替换写回 ARW 文件
+      if (effLook !== 'keep' && (item.hdBytes || item.previewBytes || item.previewUrl)) {
+        try {
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          const srcBytes = item.hdBytes || item.previewBytes;
+          let tempUrl = null;
+          if (srcBytes) {
+            tempUrl = URL.createObjectURL(new Blob([srcBytes], { type: 'image/jpeg' }));
+            img.src = tempUrl;
+          } else {
+            img.src = item.previewUrl;
+          }
+
+          await new Promise((resolve, reject) => {
+            img.onload = () => resolve();
+            img.onerror = reject;
+          });
+          if (tempUrl) URL.revokeObjectURL(tempUrl);
+
+          const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
+          replacementJpegBytes = await SonyColorRenderer.renderPreviewJpeg({
+            img,
+            params: {
+              look: effLook.toUpperCase(),
+              wbOffset: effWb,
+              profileMode,
+              lutIntensity: 1.0,
+            },
+            basePath,
+          });
+
+          if (replacementJpegBytes) {
+            newPreviewUrl = createJpegObjectUrl(replacementJpegBytes);
+          }
+        } catch (renderErr) {
+          console.warn('渲染新创意外观内嵌预览图提示:', renderErr);
+        }
+      }
+
+      // 将元数据与全新内嵌 JPEG 写入 ARW
       const outputUint8 = processArw(fullBuffer, {
         targetModel,
         defaultLook: effLook,
         profileMode,
         wbOffset: effWb,
+        replacementJpegBytes,
       });
 
       const updatedInfo = inspectArw(outputUint8, item.name);
@@ -192,6 +248,9 @@ export default function App() {
                 info: updatedInfo,
                 processedBlobUrl: blobUrl,
                 processedBuffer: outputUint8,
+                previewUrl: newPreviewUrl || f.previewUrl,
+                previewBytes: replacementJpegBytes || f.previewBytes,
+                hdBytes: replacementJpegBytes || f.hdBytes,
               }
             : f
         )
@@ -220,6 +279,58 @@ export default function App() {
       );
       return false;
     }
+  };
+
+  // 提取单张照片内嵌的全像素高清 JPG (通常几兆，如 7008x4672)
+  const handleExtractSingleJpeg = async (item) => {
+    try {
+      let jpegBytes = item.hdBytes || item.previewBytes;
+      if (!jpegBytes && item.file) {
+        const res = await extractPreviewWithInfo(item.file);
+        jpegBytes = res.hdBytes || res.bytes;
+      }
+
+      if (!jpegBytes) {
+        alert('未在 ARW 文件中找到内嵌全尺寸高清 JPEG');
+        return;
+      }
+
+      const baseName = item.name.replace(/\.[^/.]+$/, '');
+      const suffix = item.status === 'done' ? '_looks_hd' : '_embedded_hd';
+      downloadJpegBytes(jpegBytes, `${baseName}${suffix}.jpg`);
+    } catch (e) {
+      console.warn('提取内嵌全像素高清 JPG 异常:', e);
+      alert('提取内嵌全像素高清 JPG 失败: ' + e.message);
+    }
+  };
+
+  // 批量提取所有照片内嵌的全像素高清 JPG 并打包为 ZIP
+  const handleExtractAllJpegsZip = async () => {
+    if (files.length === 0) return;
+    const zip = new JSZip();
+
+    for (const item of files) {
+      let jpegBytes = item.hdBytes || item.previewBytes;
+      if (!jpegBytes && item.file) {
+        const res = await extractPreviewWithInfo(item.file);
+        jpegBytes = res.hdBytes || res.bytes;
+      }
+      if (jpegBytes) {
+        const baseName = item.name.replace(/\.[^/.]+$/, '');
+        const suffix = item.status === 'done' ? '_looks_hd' : '_embedded_hd';
+        zip.file(`${baseName}${suffix}.jpg`, jpegBytes);
+      }
+    }
+
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    const url = URL.createObjectURL(zipBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Sony_ARW_Embedded_HD_JPEGs_${Date.now()}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   // 批量注入全部文件
@@ -455,6 +566,17 @@ export default function App() {
 
         {/* 桌面端操作按钮组 */}
         <div className="control-actions desktop-actions">
+          {files.length > 0 && (
+            <button
+              className="action-btn extract-all-btn"
+              onClick={handleExtractAllJpegsZip}
+              title="批量导出所有照片内嵌的高清 JPG 为 ZIP 压缩包"
+            >
+              <FileImage size={14} />
+              提取全部 JPG
+            </button>
+          )}
+
           {doneCount > 1 && (
             <button
               className="action-btn download-all-btn"
@@ -639,6 +761,15 @@ export default function App() {
                       )}
 
                       <button
+                        className="btn-icon btn-extract-jpg"
+                        onClick={() => handleExtractSingleJpeg(item)}
+                        title="提取内嵌高清 JPG 文件"
+                        aria-label="提取内嵌高清 JPG"
+                      >
+                        <FileImage size={14} />
+                      </button>
+
+                      <button
                         className="btn-icon"
                         onClick={() => handleToggleOrientation(item.id)}
                         title="切换画幅方向 (横向 / 纵向)"
@@ -696,6 +827,15 @@ export default function App() {
           </div>
 
           <div className="mobile-btn-group">
+            <button
+              className="mobile-btn mobile-download-btn"
+              onClick={handleExtractAllJpegsZip}
+              title="批量提取所有照片内嵌的高清 JPG"
+            >
+              <FileImage size={15} />
+              提取 JPG
+            </button>
+
             {doneCount > 1 && (
               <button
                 className="mobile-btn mobile-download-btn"

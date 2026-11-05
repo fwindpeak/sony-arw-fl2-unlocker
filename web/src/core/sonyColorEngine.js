@@ -751,5 +751,75 @@ export class SonyColorRenderer {
       renderer.destroy();
     }
   }
+
+  /**
+   * 将输入的预览图应用当前创意外观调色并渲染为适合写回 ARW 内嵌的 JPEG Uint8Array
+   * @param {Object} options
+   * @param {HTMLImageElement | ImageBitmap | HTMLCanvasElement} options.img
+   * @param {Object} options.params 调色参数 { look, wbOffset, profileMode... }
+   * @param {number} [options.maxByteLength] 最大字节限制 (避免超出 ARW 原槽位空间)
+   * @param {string} [options.basePath]
+   * @returns {Promise<Uint8Array>}
+   */
+  static async renderPreviewJpeg({
+    img,
+    params,
+    maxByteLength = Infinity,
+    basePath = '',
+  }) {
+    const origWidth = img.naturalWidth || img.width;
+    const origHeight = img.naturalHeight || img.height;
+
+    const exportCanvas = document.createElement('canvas');
+    const glTemp = exportCanvas.getContext('webgl2');
+    const maxTexSize = glTemp ? (glTemp.getParameter(glTemp.MAX_TEXTURE_SIZE) || 8192) : 8192;
+
+    let targetW = origWidth;
+    let targetH = origHeight;
+    if (targetW > maxTexSize || targetH > maxTexSize) {
+      const scale = Math.min(maxTexSize / targetW, maxTexSize / targetH);
+      targetW = Math.round(targetW * scale);
+      targetH = Math.round(targetH * scale);
+    }
+    exportCanvas.width = targetW;
+    exportCanvas.height = targetH;
+
+    const renderer = new SonyColorRenderer(exportCanvas);
+    if (!renderer.gl) {
+      throw new Error('离屏 WebGL2 上下文初始化失败');
+    }
+
+    try {
+      renderer.setImage(img);
+      await renderer.loadLut(params.look || 'FL2', basePath);
+      renderer.render({
+        ...params,
+        splitMode: 0,
+        splitRatio: 1.0,
+      });
+
+      // 尝试自适应压缩质量，确保生成的 JPEG 不大于 maxByteLength
+      const qualities = [0.92, 0.88, 0.82, 0.75, 0.68];
+      for (const q of qualities) {
+        const blob = await new Promise((resolve) => {
+          exportCanvas.toBlob(resolve, 'image/jpeg', q);
+        });
+        if (blob) {
+          const ab = await blob.arrayBuffer();
+          const bytes = new Uint8Array(ab);
+          if (bytes.length <= maxByteLength || q === qualities[qualities.length - 1]) {
+            return bytes;
+          }
+        }
+      }
+
+      const finalBlob = await new Promise((resolve) => {
+        exportCanvas.toBlob(resolve, 'image/jpeg', 0.82);
+      });
+      return new Uint8Array(await finalBlob.arrayBuffer());
+    } finally {
+      renderer.destroy();
+    }
+  }
 }
 

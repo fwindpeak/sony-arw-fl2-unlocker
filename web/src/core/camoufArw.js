@@ -156,7 +156,6 @@ export function findSr2Subifd(raw) {
 
 export function inspectArw(rawBytes, fileName = '') {
   const raw = new Uint8Array(rawBytes);
-  const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
 
   const fileSizeMb = (raw.length / (1024 * 1024)).toFixed(2);
   const isTiff = (raw[0] === 0x49 && raw[1] === 0x49 && raw[2] === 0x2a && raw[3] === 0x00) ||
@@ -457,19 +456,152 @@ export function unlockAllCreativeLooks(
   raw.set(sr2Reenc, offset);
 }
 
+/**
+ * 替换 ARW 文件内嵌的高清 JPEG 预览图为新外观渲染后的 JPEG
+ * 并同步更新 TIFF IFD 中的 Tag 0x0202 (JPEGInterchangeFormatLength)
+ * @param {Uint8Array} rawBytes ARW 文件完整数据 (Uint8Array)
+ * @param {Uint8Array} newJpegBytes 渲染后的新外观 JPEG 数据 (Uint8Array)
+ * @returns {{ success: boolean, updatedRaw: Uint8Array, message: string }}
+ */
+export function replaceEmbeddedPreviewInArw(rawBytes, newJpegBytes) {
+  if (!rawBytes || rawBytes.length < 100 || !newJpegBytes || newJpegBytes.length < 100) {
+    return { success: false, updatedRaw: rawBytes, message: '输入数据无效' };
+  }
+
+  const isLe = rawBytes[0] === 0x49 && rawBytes[1] === 0x49; // 'II' = Little Endian
+  const u16 = (off) =>
+    isLe ? rawBytes[off] | (rawBytes[off + 1] << 8) : (rawBytes[off] << 8) | rawBytes[off + 1];
+  const u32 = (off) =>
+    isLe
+      ? ((rawBytes[off] |
+          (rawBytes[off + 1] << 8) |
+          (rawBytes[off + 2] << 16) |
+          (rawBytes[off + 3] << 24)) >>>
+        0)
+      : (((rawBytes[off] << 24) |
+          (rawBytes[off + 1] << 16) |
+          (rawBytes[off + 2] << 8) |
+          rawBytes[off + 3]) >>>
+        0);
+
+  const writeU32 = (target, off, val) => {
+    if (isLe) {
+      target[off] = val & 0xff;
+      target[off + 1] = (val >> 8) & 0xff;
+      target[off + 2] = (val >> 16) & 0xff;
+      target[off + 3] = (val >> 24) & 0xff;
+    } else {
+      target[off] = (val >> 24) & 0xff;
+      target[off + 1] = (val >> 16) & 0xff;
+      target[off + 2] = (val >> 8) & 0xff;
+      target[off + 3] = val & 0xff;
+    }
+  };
+
+  const firstIfd = u32(4);
+  const visited = new Set();
+  const queue = [firstIfd];
+  const jpegSlots = [];
+
+  while (queue.length > 0) {
+    const off = queue.shift();
+    if (visited.has(off) || off + 2 > rawBytes.length) continue;
+    visited.add(off);
+
+    const cnt = u16(off);
+    let curr = off + 2;
+    let w = 0, h = 0, jOff = 0, jLen = 0;
+    let jOffValPos = -1;
+    let jLenValPos = -1;
+
+    for (let i = 0; i < cnt; i++) {
+      if (curr + 12 > rawBytes.length) break;
+      const tag = u16(curr);
+      const typ = u16(curr + 2);
+      const c = u32(curr + 4);
+      const val = typ === 4 ? u32(curr + 8) : (typ === 3 ? u16(curr + 8) : 0);
+
+      if (tag === 0x0100) w = val; // ImageWidth
+      else if (tag === 0x0101) h = val; // ImageHeight
+      else if (tag === 0x0201) {
+        jOff = val;
+        jOffValPos = curr + 8;
+      } else if (tag === 0x0202) {
+        jLen = val;
+        jLenValPos = curr + 8;
+      } else if (tag === 0x014a) {
+        // SubIFDs
+        if (c === 1) queue.push(val);
+        else if (c > 1 && val + c * 4 <= rawBytes.length) {
+          for (let k = 0; k < c; k++) queue.push(u32(val + k * 4));
+        }
+      } else if (tag === 0x8769) {
+        // ExifIFDPointer
+        if (val > 0 && val < rawBytes.length) queue.push(val);
+      }
+      curr += 12;
+    }
+
+    if (jOff > 0 && jLen > 0 && jOffValPos > 0 && jLenValPos > 0) {
+      jpegSlots.push({
+        width: w,
+        height: h,
+        offset: jOff,
+        length: jLen,
+        offValPos: jOffValPos,
+        lenValPos: jLenValPos,
+      });
+    }
+
+    if (curr + 4 <= rawBytes.length) {
+      const nextIfd = u32(curr);
+      if (nextIfd > 0) queue.push(nextIfd);
+    }
+  }
+
+  if (jpegSlots.length === 0) {
+    return { success: false, updatedRaw: rawBytes, message: '未找到内嵌 JPEG 槽位' };
+  }
+
+  // 选取全像素高清大图主槽位 (如 7008x4672，空间通常 1.5MB~5MB，通常位于 IFD2)
+  jpegSlots.sort((a, b) => b.length - a.length);
+  const target = jpegSlots[0];
+
+  // 1. 若新 JPEG 尺寸 <= 旧 JPEG 空间：原地安全替换（零位移，最安全稳定）
+  if (newJpegBytes.length <= target.length) {
+    rawBytes.set(newJpegBytes, target.offset);
+    if (newJpegBytes.length < target.length) {
+      rawBytes.fill(0, target.offset + newJpegBytes.length, target.offset + target.length);
+    }
+    writeU32(rawBytes, target.lenValPos, newJpegBytes.length);
+    return { success: true, updatedRaw: rawBytes, message: '全像素高清内嵌 JPEG 原地安全更新完成' };
+  }
+
+  // 2. 若新 JPEG 尺寸 > 旧 JPEG 空间：追加到文件末尾并更新 TIFF 指针
+  const newRaw = new Uint8Array(rawBytes.length + newJpegBytes.length);
+  newRaw.set(rawBytes, 0);
+  const newOffset = rawBytes.length;
+  newRaw.set(newJpegBytes, newOffset);
+
+  writeU32(newRaw, target.offValPos, newOffset);
+  writeU32(newRaw, target.lenValPos, newJpegBytes.length);
+
+  return { success: true, updatedRaw: newRaw, message: '全像素高清内嵌 JPEG 末尾追加更新完成' };
+}
+
 export function processArw(inputData, options = {}) {
-  const raw = new Uint8Array(
+  let raw = new Uint8Array(
     inputData instanceof ArrayBuffer
       ? inputData.slice(0)
       : inputData.buffer.slice(inputData.byteOffset, inputData.byteOffset + inputData.byteLength)
   );
-  const origLen = raw.length;
 
   const targetModel = options.targetModel || 'a7c2';
   const defaultLook = options.defaultLook || 'fl2';
   const profileMode = options.profileMode || 'balanced';
   const customFl2Bin = options.customFl2Bin || null;
   const customFl3Bin = options.customFl3Bin || null;
+  const replacementJpegBytes = options.replacementJpegBytes || null;
 
   const wbOffset = options.wbOffset !== undefined ? options.wbOffset : -400;
 
@@ -493,10 +625,15 @@ export function processArw(inputData, options = {}) {
     }
   }
 
+  // 1. 注入全套创意外观元数据与白平衡
   unlockAllCreativeLooks(raw, defaultLook, profileMode, customFl2Bin, customFl3Bin, wbOffset);
 
-  if (raw.length !== origLen) {
-    throw new Error('File size mismatch error!');
+  // 2. 将 ARW 内嵌的预览 JPEG 按新的创意外观渲染结果写回替换
+  if (replacementJpegBytes && replacementJpegBytes.length > 0) {
+    const replaceRes = replaceEmbeddedPreviewInArw(raw, replacementJpegBytes);
+    if (replaceRes.success && replaceRes.updatedRaw) {
+      raw = replaceRes.updatedRaw;
+    }
   }
 
   return raw;
