@@ -281,7 +281,7 @@
   border-color: rgba(56, 189, 248, 0.3);
 }
 
-/* 视口浮动控制条 */
+/* 视口浮动控制条 (固定于视口左下角，防分屏拖拽遮挡) */
 .viewport-controls {
   position: absolute;
   bottom: 14px;
@@ -293,8 +293,10 @@
   display: flex;
   align-items: center;
   gap: 3px;
-  z-index: 20;
-  box-shadow: var(--shadow-sm);
+  z-index: 50; /* 高于分屏线(10)与所有浮层，杜绝遮挡 */
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  pointer-events: auto;
+  user-select: none;
 }
 
 .vp-btn {

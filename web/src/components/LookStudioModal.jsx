@@ -216,14 +216,20 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
 
   // 分屏滑块拖拽逻辑 (支持触控和鼠标)
   const updateSplitRatioFromClientX = (clientX) => {
-    if (!containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
+    const targetEl = canvasRef.current || containerRef.current;
+    if (!targetEl) return;
+    const rect = targetEl.getBoundingClientRect();
+    if (rect.width <= 0) return;
     const x = clientX - rect.left;
     const ratio = Math.max(0.01, Math.min(0.99, x / rect.width));
     setSplitRatio(ratio);
   };
 
   const handlePointerDown = (e) => {
+    // 忽略控制条与所有交互按钮
+    if (e.target.closest('.viewport-controls') || e.target.closest('button')) {
+      return;
+    }
     if (splitMode !== 1) return;
     setIsDraggingSplit(true);
     e.currentTarget.setPointerCapture?.(e.pointerId);
@@ -510,7 +516,13 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
             </div>
 
             {/* 视口浮动控制 (缩放) */}
-            <div className="viewport-controls">
+            <div
+              className="viewport-controls"
+              onPointerDown={(e) => e.stopPropagation()}
+              onPointerMove={(e) => e.stopPropagation()}
+              onPointerUp={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
               <button
                 className="vp-btn"
                 onClick={() => setZoomLevel((z) => Math.min(2.5, z + 0.25))}
