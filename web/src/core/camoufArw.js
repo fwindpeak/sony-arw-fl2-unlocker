@@ -602,18 +602,18 @@ export function replaceEmbeddedPreviewInArw(rawBytes, newJpegBytes) {
 }
 
 export function processArw(inputData, options = {}) {
-  let raw = new Uint8Array(
+  const raw = new Uint8Array(
     inputData instanceof ArrayBuffer
       ? inputData.slice(0)
       : inputData.buffer.slice(inputData.byteOffset, inputData.byteOffset + inputData.byteLength)
   );
+  const origLen = raw.length;
 
   const targetModel = options.targetModel || 'a7c2';
   const defaultLook = options.defaultLook || 'fl2';
   const profileMode = options.profileMode || 'balanced';
   const customFl2Bin = options.customFl2Bin || null;
   const customFl3Bin = options.customFl3Bin || null;
-  const replacementJpegBytes = options.replacementJpegBytes || null;
 
   const wbOffset = options.wbOffset !== undefined ? options.wbOffset : 0;
 
@@ -637,15 +637,12 @@ export function processArw(inputData, options = {}) {
     }
   }
 
-  // 1. 注入全套创意外观元数据与白平衡
+  // 注入全套创意外观元数据与白平衡（完全零位移无损写入，绝对不碰内嵌 JPEG，保持索尼官方工具 100% 原生兼容）
   unlockAllCreativeLooks(raw, defaultLook, profileMode, customFl2Bin, customFl3Bin, wbOffset);
 
-  // 2. 将 ARW 内嵌的预览 JPEG 按新的创意外观渲染结果写回替换
-  if (replacementJpegBytes && replacementJpegBytes.length > 0) {
-    const replaceRes = replaceEmbeddedPreviewInArw(raw, replacementJpegBytes);
-    if (replaceRes.success && replaceRes.updatedRaw) {
-      raw = replaceRes.updatedRaw;
-    }
+  // 确保尺寸严格一致，杜绝任何位移损坏
+  if (raw.length !== origLen) {
+    throw new Error('ARW 文件尺寸异常变化，已中止以防止文件损坏');
   }
 
   return raw;

@@ -183,15 +183,14 @@ export default function App() {
       const effLook = lookOverride || defaultLook;
       const effWb = wbOverride !== null && wbOverride !== undefined ? Number(wbOverride) : Number(wbOffset);
 
-      let replacementJpegBytes = null;
       let newPreviewUrl = null;
 
-      // 渲染带有新创意外观色彩的内嵌全尺寸高清 JPEG 并替换写回 ARW 文件
-      if (effLook !== 'keep' && (item.hdBytes || item.previewBytes || item.previewUrl)) {
+      // 仅用于网页端卡片缩略图实时展示所选外观色彩（不修改 ARW 文件内嵌数据）
+      if (effLook !== 'keep' && (item.previewBytes || item.previewUrl)) {
         try {
           const img = new Image();
           img.crossOrigin = 'anonymous';
-          const srcBytes = item.hdBytes || item.previewBytes;
+          const srcBytes = item.previewBytes || item.hdBytes;
           let tempUrl = null;
           if (srcBytes) {
             tempUrl = URL.createObjectURL(new Blob([srcBytes], { type: 'image/jpeg' }));
@@ -207,7 +206,7 @@ export default function App() {
           if (tempUrl) URL.revokeObjectURL(tempUrl);
 
           const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
-          replacementJpegBytes = await SonyColorRenderer.renderPreviewJpeg({
+          const cardPreviewBytes = await SonyColorRenderer.renderPreviewJpeg({
             img,
             params: {
               look: effLook.toUpperCase(),
@@ -218,21 +217,20 @@ export default function App() {
             basePath,
           });
 
-          if (replacementJpegBytes) {
-            newPreviewUrl = createJpegObjectUrl(replacementJpegBytes);
+          if (cardPreviewBytes) {
+            newPreviewUrl = createJpegObjectUrl(cardPreviewBytes);
           }
         } catch (renderErr) {
-          console.warn('渲染新创意外观内嵌预览图提示:', renderErr);
+          console.warn('渲染网页卡片外观色彩预览提示:', renderErr);
         }
       }
 
-      // 将元数据与全新内嵌 JPEG 写入 ARW
+      // 纯净无损元数据注入（零位移，不改写内嵌 JPEG，确保索尼官方 Imaging Edge Edit 完全正常识别与显影）
       const outputUint8 = processArw(fullBuffer, {
         targetModel,
         defaultLook: effLook,
         profileMode,
         wbOffset: effWb,
-        replacementJpegBytes,
       });
 
       const updatedInfo = inspectArw(outputUint8, item.name);
@@ -249,8 +247,6 @@ export default function App() {
                 processedBlobUrl: blobUrl,
                 processedBuffer: outputUint8,
                 previewUrl: newPreviewUrl || f.previewUrl,
-                previewBytes: replacementJpegBytes || f.previewBytes,
-                hdBytes: replacementJpegBytes || f.hdBytes,
               }
             : f
         )
@@ -296,8 +292,7 @@ export default function App() {
       }
 
       const baseName = item.name.replace(/\.[^/.]+$/, '');
-      const suffix = item.status === 'done' ? '_looks_hd' : '_embedded_hd';
-      downloadJpegBytes(jpegBytes, `${baseName}${suffix}.jpg`);
+      downloadJpegBytes(jpegBytes, `${baseName}_embedded_hd.jpg`);
     } catch (e) {
       console.warn('提取内嵌全像素高清 JPG 异常:', e);
       alert('提取内嵌全像素高清 JPG 失败: ' + e.message);
@@ -317,8 +312,7 @@ export default function App() {
       }
       if (jpegBytes) {
         const baseName = item.name.replace(/\.[^/.]+$/, '');
-        const suffix = item.status === 'done' ? '_looks_hd' : '_embedded_hd';
-        zip.file(`${baseName}${suffix}.jpg`, jpegBytes);
+        zip.file(`${baseName}_embedded_hd.jpg`, jpegBytes);
       }
     }
 
