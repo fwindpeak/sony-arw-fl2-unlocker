@@ -58,7 +58,10 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
   // 渲染引擎: 'cube' = 现有 .cube 3D-LUT 模式; 'native' = IED 原生复刻 (验证)
   const [engineMode, setEngineMode] = useState('cube');
   const [coefMode, setCoefMode] = useState('base');
-  const [applyCurve, setApplyCurve] = useState(true);
+  // 色调曲线默认关闭: 0x7805 的 X 轴是对数间隔控制点 (步长 1024→32768),
+  // 该表属于线性光/对数域管线级, 在显示域采样会把中灰推到近白 (实测 0.1→0.87)。
+  // 其确切采样域未确认前不默认启用, 避免冒充已复刻。
+  const [applyCurve, setApplyCurve] = useState(false);
   const [nativeInfo, setNativeInfo] = useState(null);
 
   // 探测全画幅原始分辨率
@@ -795,7 +798,7 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
                       checked={applyCurve}
                       onChange={(e) => setApplyCurve(e.target.checked)}
                     />
-                    应用色调曲线级（0x7805/0x7806，线性插值采样）
+                    应用色调曲线级（0x7805/0x7806，采样域未确认，默认关）
                   </label>
                   {nativeInfo && (
                     <div className="card-desc-text" style={{ marginTop: 6 }}>
