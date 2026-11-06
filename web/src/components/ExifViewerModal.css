@@ -277,6 +277,109 @@
   gap: 16px;
 }
 
+/* 快门高光英雄看板 */
+.shutter-hero-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  background: linear-gradient(135deg, rgba(8, 145, 178, 0.08) 0%, rgba(5, 150, 105, 0.06) 100%), var(--bg-panel);
+  border: 1px solid rgba(8, 145, 178, 0.28);
+  border-radius: 12px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
+}
+
+.shutter-hero-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.shutter-hero-icon-ring {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: rgba(8, 145, 178, 0.14);
+  border: 1px solid rgba(8, 145, 178, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-teal);
+  flex-shrink: 0;
+}
+
+.shutter-hero-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.shutter-hero-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.shutter-hero-tag {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  background: rgba(8, 145, 178, 0.12);
+  color: var(--accent-teal);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 500;
+}
+
+.shutter-hero-number {
+  font-size: 26px;
+  line-height: 1.15;
+  font-weight: 800;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  font-feature-settings: 'tnum';
+  letter-spacing: -0.02em;
+}
+
+.shutter-hero-unit {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  margin-left: 2px;
+}
+
+.shutter-hero-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--status-success);
+  background: rgba(5, 150, 105, 0.1);
+  border: 1px solid rgba(5, 150, 105, 0.25);
+  padding: 6px 12px;
+  border-radius: 20px;
+  white-space: nowrap;
+}
+
+.shutter-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: var(--status-success);
+  box-shadow: 0 0 6px var(--status-success);
+}
+
+@media (max-width: 600px) {
+  .shutter-hero-card {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+}
+
 .exif-overview-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));

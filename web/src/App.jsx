@@ -19,7 +19,8 @@ import {
   CheckCircle2,
   RotateCw,
   FileImage,
-  Info
+  Info,
+  Gauge
 } from 'lucide-react';
 import JSZip from 'jszip';
 import {
@@ -735,13 +736,24 @@ export default function App() {
 
                   {/* 卡片主体内容区 */}
                   <div className="card-body">
-                    {/* 文件名与大小 */}
+                    {/* 文件名与大小 / 快门亮点 */}
                     <div className="card-title-row">
                       <div className="card-filename" title={item.name}>
                         {item.name}
                       </div>
-                      <div className="card-filesize">
-                        {(item.size / (1024 * 1024)).toFixed(1)} MB
+                      <div className="card-meta-right">
+                        {item.exifResult?.overview?.shutterCount !== undefined && (
+                          <span
+                            className="card-shutter-pill"
+                            title={`Sony 硬件物理快门释放次数: ${item.exifResult.overview.shutterCount.toLocaleString()} 次`}
+                          >
+                            <Gauge size={10} />
+                            <span>快门 {item.exifResult.overview.shutterCount.toLocaleString()}</span>
+                          </span>
+                        )}
+                        <span className="card-filesize">
+                          {(item.size / (1024 * 1024)).toFixed(1)} MB
+                        </span>
                       </div>
                     </div>
 

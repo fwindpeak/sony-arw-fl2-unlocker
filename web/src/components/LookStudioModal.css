@@ -91,6 +91,21 @@
   white-space: nowrap;
 }
 
+.studio-shutter-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-weight: 650;
+  background: rgba(8, 145, 178, 0.12);
+  border: 1px solid rgba(8, 145, 178, 0.28);
+  color: var(--accent-teal);
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
 .studio-top-actions {
   display: flex;
   align-items: center;

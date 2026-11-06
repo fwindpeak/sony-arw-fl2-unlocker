@@ -15,7 +15,8 @@ import {
   ZoomOut,
   Maximize2,
   CheckCircle2,
-  Layers2
+  Layers2,
+  Gauge
 } from 'lucide-react';
 import { SONY_CREATIVE_LOOKS, SonyColorRenderer } from '../core/sonyColorEngine';
 import { extractFullResJpegFromArw, createOrientedJpegUrl } from '../core/previewExtractor';
@@ -410,6 +411,15 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
             {photoItem.orientationInfo && (
               <span className="studio-orient-tag">
                 {photoItem.orientationInfo.label} {photoItem.orientationInfo.ratioTag}
+              </span>
+            )}
+            {photoItem.exifResult?.overview?.shutterCount !== undefined && (
+              <span
+                className="studio-shutter-tag"
+                title={`Sony 硬件物理快门释放次数: ${photoItem.exifResult.overview.shutterCount.toLocaleString()} 次`}
+              >
+                <Gauge size={11} />
+                <span>快门 {photoItem.exifResult.overview.shutterCount.toLocaleString()}</span>
               </span>
             )}
             {photoItem.exifResult?.overview && (photoItem.exifResult.overview.fNumber || photoItem.exifResult.overview.exposureTimeString || photoItem.exifResult.overview.iso) && (

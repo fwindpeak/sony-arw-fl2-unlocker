@@ -207,6 +207,39 @@ export const ExifViewerModal = ({
           ) : activeTab === 'overview' ? (
             /* ================= 1. 结构化概览 ================= */
             <div className="exif-overview-stack">
+              {/* 快门次数高光看板 (显眼突出硬件快门数据) */}
+              {overview.shutterCount !== undefined && (
+                <div className="shutter-hero-card">
+                  <div className="shutter-hero-left">
+                    <div className="shutter-hero-icon-ring">
+                      <Gauge size={22} />
+                    </div>
+                    <div className="shutter-hero-text">
+                      <div className="shutter-hero-title">
+                        <span>Sony 硬件物理快门释放计数</span>
+                        <span className="shutter-hero-tag">MakerNote 0x9050</span>
+                      </div>
+                      <div className="shutter-hero-number">
+                        {overview.shutterCount.toLocaleString()}
+                        <span className="shutter-hero-unit"> 次</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="shutter-hero-status">
+                    <span className="shutter-status-dot" />
+                    <span>
+                      {overview.shutterCount < 10000
+                        ? '极新机况 (<1万次)'
+                        : overview.shutterCount < 50000
+                        ? '正常使用 (<5万次)'
+                        : overview.shutterCount < 150000
+                        ? '主力成色 (<15万次)'
+                        : '高负荷机况'}
+                    </span>
+                  </div>
+                </div>
+              )}
+
               {/* 四格卡片 */}
               <div className="exif-overview-grid">
                 {/* 1. 机身与镜头 */}
@@ -226,12 +259,6 @@ export const ExifViewerModal = ({
                       {overview.sensorFormatEstimate && (
                         <div className="badge-sensor">
                           {overview.sensorFormatEstimate}
-                        </div>
-                      )}
-                      {overview.shutterCount !== undefined && (
-                        <div className="badge-shutter">
-                          <Gauge size={11} style={{ marginRight: 3, verticalAlign: -1 }} />
-                          快门: {overview.shutterCount.toLocaleString()} 次
                         </div>
                       )}
                       {slotInfo && (
@@ -368,7 +395,7 @@ export const ExifViewerModal = ({
                           ? `${overview.imageWidth} × ${overview.imageHeight}`
                           : null,
                     },
-                    { label: '传感器画幅估算', val: overview.sensorFormatEstimate },
+                    { label: '画幅规格', val: overview.sensorFormatEstimate },
                     { label: '拍摄时间 (Original Date)', val: overview.dateTimeOriginal },
                     { label: '固件/机身软件', val: overview.software },
                     { label: '摄影师 / 作者', val: overview.artist },

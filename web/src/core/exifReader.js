@@ -31,26 +31,23 @@ export function estimateSensorFormat(focalLength, focal35mm, modelName) {
     model.includes('oneplus') ||
     model.includes('honor')
   ) {
-    if (focalLength && focalLength < 10) {
-      return '智能手机传感器 (约 1/1.3" ~ 1/2.5")';
-    }
-    return '智能手机计算摄影系统';
+    return '手机传感器';
   }
 
   if (focalLength && focal35mm && focalLength > 0) {
     const cropFactor = focal35mm / focalLength;
     if (cropFactor <= 0.88) {
-      return '中画幅 Medium Format (44×33mm / 0.79x)';
+      return '中画幅';
     } else if (cropFactor >= 0.95 && cropFactor <= 1.08) {
-      return '35mm 全画幅 Full Frame (36×24mm / 1.0x)';
+      return '全画幅';
     } else if (cropFactor >= 1.4 && cropFactor <= 1.65) {
-      return 'APS-C 画幅 (约 23.6×15.6mm / 1.5x~1.6x)';
+      return 'APS-C';
     } else if (cropFactor >= 1.9 && cropFactor <= 2.2) {
-      return 'Micro 4/3 微单画幅 (17.3×13mm / 2.0x)';
+      return 'M4/3';
     } else if (cropFactor >= 2.6 && cropFactor <= 3.2) {
-      return '1 英寸传感器 (13.2×8.8mm / 2.7x)';
+      return '1 英寸';
     } else if (cropFactor > 3.5) {
-      return `小型传感器 (等效裁切系数 ${cropFactor.toFixed(1)}x)`;
+      return `小型传感器 (${cropFactor.toFixed(1)}x)`;
     }
   }
 
@@ -67,16 +64,16 @@ export function estimateSensorFormat(focalLength, focal35mm, modelName) {
     model.includes('nikon z 8') ||
     model.includes('nikon z 9')
   ) {
-    return '35mm 全画幅 Full Frame (36×24mm / 1.0x)';
+    return '全画幅';
   }
   if (model.includes('ilce-6') || model.includes('a6') || model.includes('zv-e10')) {
-    return 'APS-C 画幅 (约 23.5×15.6mm / 1.5x)';
+    return 'APS-C';
   }
   if (model.includes('gfx') || model.includes('x1d') || model.includes('645')) {
-    return '中画幅 Medium Format (44×33mm)';
+    return '中画幅';
   }
 
-  return '通用相机传感器';
+  return '标准画幅';
 }
 
 /**
