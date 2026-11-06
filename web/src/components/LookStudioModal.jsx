@@ -19,7 +19,6 @@ import {
   Gauge
 } from 'lucide-react';
 import { SONY_CREATIVE_LOOKS, SonyColorRenderer } from '../core/sonyColorEngine';
-import { IedNativeRenderer, COEF_MODE_OPTIONS } from '../core/iedNativeEngine';
 import { extractFullResJpegFromArw, createOrientedJpegUrl } from '../core/previewExtractor';
 import { SonyRawDecoder } from '../core/rawDecoder';
 import './LookStudioModal.css';
@@ -28,8 +27,6 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const rendererRef = useRef(null);
-  const nativeRendererRef = useRef(null);
-  const imageSourceRef = useRef(null);
 
   // 调色参数状态
   const [selectedLook, setSelectedLook] = useState('FL2');
@@ -55,15 +52,6 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
   const [isRawMode, setIsRawMode] = useState(false);
   const [isDecodingRaw, setIsDecodingRaw] = useState(false);
 
-  // 渲染引擎: 'cube' = 现有 .cube 3D-LUT 模式; 'native' = IED 原生复刻 (验证)
-  const [engineMode, setEngineMode] = useState('cube');
-  const [coefMode, setCoefMode] = useState('base');
-  // 色调曲线默认关闭: 0x7805 的 X 轴是对数间隔控制点 (步长 1024→32768),
-  // 该表属于线性光/对数域管线级, 在显示域采样会把中灰推到近白 (实测 0.1→0.87)。
-  // 其确切采样域未确认前不默认启用, 避免冒充已复刻。
-  const [applyCurve, setApplyCurve] = useState(false);
-  const [nativeInfo, setNativeInfo] = useState(null);
-
   // 探测全画幅原始分辨率
   useEffect(() => {
     let cancelled = false;
@@ -87,14 +75,10 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
 
   // 触发着色器渲染
   const triggerRender = useCallback((overrides = {}) => {
-    const target =
-      engineMode === 'native' && nativeRendererRef.current
-        ? nativeRendererRef.current
-        : rendererRef.current;
-    if (!target) return;
+    if (!rendererRef.current) return;
 
     const currentLook = overrides.look || selectedLook;
-    target.render({
+    rendererRef.current.render({
       look: currentLook,
       lutIntensity: overrides.lutIntensity !== undefined ? overrides.lutIntensity : lutIntensity,
       exposure: overrides.exposure !== undefined ? overrides.exposure : exposure,
@@ -104,7 +88,6 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
       wbOffset: overrides.wbOffset !== undefined ? overrides.wbOffset : wbOffset,
       tint: overrides.tint !== undefined ? overrides.tint : tint,
       saturation: overrides.saturation !== undefined ? overrides.saturation : saturation,
-      applyCurve: overrides.applyCurve !== undefined ? overrides.applyCurve : applyCurve,
       splitMode: isHoldingOriginal ? 2 : (overrides.splitMode !== undefined ? overrides.splitMode : splitMode),
       splitRatio: overrides.splitRatio !== undefined ? overrides.splitRatio : splitRatio,
       isRaw: overrides.isRaw !== undefined ? overrides.isRaw : isRawMode,
@@ -123,8 +106,6 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
     splitRatio,
     isHoldingOriginal,
     isRawMode,
-    engineMode,
-    applyCurve,
   ]);
 
   // 初始化 WebGL 渲染引擎
@@ -145,8 +126,6 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
       img.onload = async () => {
         if (cancelled || isRawMode) return;
         renderer.setImage(img);
-        imageSourceRef.current = img;
-        if (nativeRendererRef.current) nativeRendererRef.current.setImage(img);
         setIsLoadingLut(true);
         await renderer.loadLut(selectedLook, basePath);
         if (cancelled || isRawMode) return;
@@ -172,8 +151,6 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
         ctx.putImageData(decoded.imageData, 0, 0);
 
         renderer.setImage(canvas);
-        imageSourceRef.current = canvas;
-        if (nativeRendererRef.current) nativeRendererRef.current.setImage(canvas);
         setIsRawMode(true);
         setIsDecodingRaw(false);
 
@@ -200,10 +177,6 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
         }
       }
       rendererRef.current = null;
-      if (nativeRendererRef.current) {
-        nativeRendererRef.current.destroy();
-        nativeRendererRef.current = null;
-      }
     };
   }, [photoItem]);
 
@@ -227,84 +200,18 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
 
   // 切换创意外观
   const handleSelectLook = async (lookKey) => {
-    if (selectedLook === lookKey) return;
+    if (selectedLook === lookKey || !rendererRef.current) return;
     setSelectedLook(lookKey);
     setIsLoadingLut(true);
 
     try {
       const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
-      if (engineMode === 'native') {
-        await ensureNativeRenderer(lookKey);
-        const info = await nativeRendererRef.current.loadLook(lookKey, basePath, coefMode);
-        setNativeInfo(info);
-      } else if (rendererRef.current) {
-        await rendererRef.current.loadLut(lookKey, basePath);
-      }
+      await rendererRef.current.loadLut(lookKey, basePath);
     } catch (e) {
       console.warn('LUT 加载提示:', e);
     } finally {
       setIsLoadingLut(false);
       triggerRender({ look: lookKey });
-    }
-  };
-
-  // 创建/复用 IED 原生复刻渲染器（与 .cube 渲染器共用同一画布）
-  const ensureNativeRenderer = async (lookKeyOverride) => {
-    if (nativeRendererRef.current) return nativeRendererRef.current;
-    const renderer = new IedNativeRenderer(canvasRef.current);
-    nativeRendererRef.current = renderer;
-    if (imageSourceRef.current) {
-      renderer.setImage(imageSourceRef.current);
-    }
-    const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
-    const info = await renderer.loadLook(lookKeyOverride || selectedLook, basePath, coefMode);
-    setNativeInfo(info);
-    return renderer;
-  };
-
-  // 切换渲染引擎
-  const handleEngineSwitch = async (mode) => {
-    if (mode === engineMode) return;
-    setEngineMode(mode);
-    if (mode === 'native') {
-      setIsLoadingLut(true);
-      try {
-        await ensureNativeRenderer();
-      } catch (e) {
-        console.warn('原生引擎加载提示:', e);
-      } finally {
-        setIsLoadingLut(false);
-      }
-      triggerRender();
-    } else {
-      if (nativeRendererRef.current) {
-        nativeRendererRef.current.destroy();
-        nativeRendererRef.current = null;
-      }
-      // 画布尺寸可能被原生渲染器改过, 用当前图源重置 .cube 渲染器
-      if (rendererRef.current && imageSourceRef.current) {
-        rendererRef.current.setImage(imageSourceRef.current);
-      }
-      triggerRender();
-    }
-  };
-
-  // 切换 Argus 系数合成候选（原生模式）
-  const handleCoefModeChange = async (mode) => {
-    if (mode === coefMode) return;
-    setCoefMode(mode);
-    if (engineMode === 'native' && nativeRendererRef.current) {
-      setIsLoadingLut(true);
-      try {
-        const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
-        const info = await nativeRendererRef.current.loadLook(selectedLook, basePath, mode);
-        setNativeInfo(info);
-      } catch (e) {
-        console.warn('原生参数加载提示:', e);
-      } finally {
-        setIsLoadingLut(false);
-      }
-      triggerRender();
     }
   };
 
@@ -372,8 +279,6 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
       ctx.putImageData(decoded.imageData, 0, 0);
 
       rendererRef.current.setImage(canvas);
-      imageSourceRef.current = canvas;
-      if (nativeRendererRef.current) nativeRendererRef.current.setImage(canvas);
       setIsRawMode(true);
       triggerRender();
     } catch (err) {
@@ -387,36 +292,6 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
   const handleExportJpeg = async () => {
     if (isExporting) return;
     setIsExporting(true);
-
-    // IED 原生复刻模式: 导出当前预览画布 (原生全分辨率导出待管线接线完成后接入)
-    if (engineMode === 'native') {
-      try {
-        setExportProgress('正在导出原生复刻预览...');
-        triggerRender();
-        const blob = await new Promise((resolve) => canvasRef.current.toBlob(resolve, 'image/jpeg', 0.96));
-        if (!blob) throw new Error('画布导出失败');
-        const baseName = photoItem.name.replace(/\.[^/.]+$/, '');
-        const downloadUrl = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = downloadUrl;
-        a.download = `${baseName}_${selectedLook}_IEDNative.jpg`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(downloadUrl);
-        setExportProgress('导出完成');
-        setTimeout(() => {
-          setIsExporting(false);
-          setExportProgress('');
-        }, 1500);
-      } catch (err) {
-        console.error('原生模式导出失败:', err);
-        alert('导出照片失败: ' + err.message);
-        setIsExporting(false);
-        setExportProgress('');
-      }
-      return;
-    }
 
     try {
       const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
@@ -737,77 +612,6 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
                 </div>
                 <div className="card-desc-text">{currentLookInfo.desc}</div>
               </div>
-            </div>
-
-            {/* 渲染引擎切换（IED 原生复刻验证） */}
-            <div className="panel-section">
-              <div className="section-head">
-                <div className="section-title">
-                  <Sliders size={15} />
-                  <span>渲染引擎（验证）</span>
-                </div>
-              </div>
-
-              <div className="view-mode-toggle">
-                <button
-                  className={`view-btn ${engineMode === 'cube' ? 'active' : ''}`}
-                  onClick={() => handleEngineSwitch('cube')}
-                  title="使用 public/luts 的 .cube 3D-LUT（Adobe 管线产物）"
-                >
-                  .cube 模式
-                </button>
-                <button
-                  className={`view-btn ${engineMode === 'native' ? 'active' : ''}`}
-                  onClick={() => handleEngineSwitch('native')}
-                  title="运行时从 *_profile.bin 按 Edit.app 逆向公式生成（CCM + Argus 129×129 色度 LUT）"
-                >
-                  IED 原生复刻
-                </button>
-              </div>
-
-              {engineMode === 'native' && (
-                <div className="look-desc-card" style={{ marginTop: 10 }}>
-                  <div className="card-desc-text">
-                    原生链：线性 CCM（0x7800）→ YCbCr → Argus 129×129 色度 LUT（运行时由
-                    0x7842–0x784e 按 FUN_1000bfe60 / FUN_1000c0048 公式生成）
-                    {applyCurve ? ' → 色调曲线（0x7805/06）' : ''}。
-                    色相整形 0x780f 与 33³ 主 LUT 的接线尚未确认，未纳入本链。
-                  </div>
-                  <div className="slider-item" style={{ marginTop: 8 }}>
-                    <div className="slider-label-row">
-                      <span>Argus 系数合成（模式字待定）</span>
-                    </div>
-                    <select
-                      value={coefMode}
-                      onChange={(e) => handleCoefModeChange(e.target.value)}
-                      style={{ width: '100%' }}
-                    >
-                      {COEF_MODE_OPTIONS.map((opt) => (
-                        <option key={opt.key} value={opt.key}>
-                          {opt.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <label
-                    className="card-desc-text"
-                    style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 8, cursor: 'pointer' }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={applyCurve}
-                      onChange={(e) => setApplyCurve(e.target.checked)}
-                    />
-                    应用色调曲线级（0x7805/0x7806，采样域未确认，默认关）
-                  </label>
-                  {nativeInfo && (
-                    <div className="card-desc-text" style={{ marginTop: 6 }}>
-                      当前 profile：{nativeInfo.name || nativeInfo.lookKey} · 有效系数 [
-                      {nativeInfo.coef.join(', ')}]
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
 
             {/* 胶片浓度与色温校正 */}
