@@ -416,118 +416,150 @@
   font-size: 11px;
 }
 
-/* 画幅朝向角标 (横向 / 纵向) */
-.thumb-badge-orientation {
+/* ==========================================================================
+   Photo Card & Thumbnails (Modern Studio Design)
+   ========================================================================== */
+
+/* 缩略图浮动角标容器 */
+.thumb-top-left-badges {
   position: absolute;
   top: 8px;
   left: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.thumb-top-right-badges {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+/* 轻量状态药丸 */
+.thumb-pill-done {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: rgba(5, 150, 105, 0.92);
+  color: #ffffff;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+
+.thumb-pill-neutral {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   font-size: 10px;
   font-weight: 600;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-family: var(--font-mono);
-  z-index: 2;
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.75);
+  color: #f1f5f9;
+  border: 1px solid rgba(255, 255, 255, 0.15);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  user-select: none;
-}
-
-.thumb-badge-orientation.badge-portrait {
-  background: rgba(217, 119, 6, 0.85);
-  color: #ffffff;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-}
-
-.thumb-badge-orientation.badge-landscape {
-  background: rgba(15, 23, 42, 0.78);
-  color: #e2e8f0;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-}
-
-/* 相机型号与拍摄外观角标 */
-.thumb-badges-meta {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  display: flex;
-  gap: 4px;
-  z-index: 2;
-}
-
-.badge-model,
-.badge-look {
-  font-size: 10px;
-  font-weight: 600;
-  padding: 2px 5px;
-  border-radius: 4px;
-  backdrop-filter: blur(6px);
   font-family: var(--font-mono);
 }
 
-.badge-model {
-  background: rgba(0, 0, 0, 0.65);
-  color: #ffffff;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-}
-
-.badge-look {
-  background: var(--sony-orange);
-  color: #ffffff;
-}
-
-/* 调色暗房小微标 */
-.thumb-studio-tag {
-  position: absolute;
-  bottom: 8px;
-  right: 8px;
-  display: flex;
+/* 一体化机型与外观双色胶囊 */
+.thumb-pill-meta {
+  display: inline-flex;
   align-items: center;
-  gap: 4px;
-  background: rgba(15, 23, 42, 0.82);
-  backdrop-filter: blur(6px);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  color: #e2e8f0;
+  border-radius: 6px;
+  overflow: hidden;
   font-size: 10px;
   font-weight: 600;
-  padding: 2px 6px;
-  border-radius: 4px;
-  transition: all 0.15s ease;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
-.card-thumb-wrap:hover .thumb-studio-tag {
+.pill-model-name {
+  background: rgba(15, 23, 42, 0.85);
+  color: #e2e8f0;
+  padding: 3px 6px;
+  font-family: var(--font-mono);
+}
+
+.pill-look-code {
   background: var(--sony-orange);
   color: #ffffff;
+  padding: 3px 6px;
+  font-weight: 700;
+}
+
+/* 缩略图悬停平滑浮层 (取代常驻调色标签) */
+.thumb-hover-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 3;
+}
+
+.card-thumb-wrap:hover .thumb-hover-overlay {
+  opacity: 1;
+}
+
+.thumb-hover-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 650;
+  background: rgba(15, 23, 42, 0.88);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  transform: translateY(4px);
+  transition: all 0.2s ease;
+}
+
+.card-thumb-wrap:hover .thumb-hover-pill {
+  transform: translateY(0);
+}
+
+.thumb-hover-pill:hover {
+  background: var(--sony-orange);
   border-color: var(--sony-orange);
 }
 
-.thumb-status-done {
-  position: absolute;
-  bottom: 8px;
-  left: 8px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  background: rgba(5, 150, 105, 0.9);
-  color: #ffffff;
-  font-size: 10px;
-  font-weight: 600;
-  padding: 2px 6px;
-  border-radius: 4px;
-  backdrop-filter: blur(6px);
-}
-
-/* Card Body */
+/* ==========================================================================
+   Card Body & Content Layout
+   ========================================================================== */
 .card-body {
-  padding: 10px 12px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+  background-color: var(--bg-panel);
 }
 
-.card-meta {
+/* 标题行 */
+.card-title-row {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -536,7 +568,7 @@
 
 .card-filename {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 650;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -549,19 +581,150 @@
   font-family: var(--font-mono);
   color: var(--text-tertiary);
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
-.card-actions {
+/* 曝光参数行 (嵌入式 Exposure Strip) */
+.card-exposure-strip {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 6px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  background-color: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  cursor: pointer;
+  transition: all 0.15s ease;
 }
 
-.btn-icon {
-  width: 30px;
-  height: 30px;
-  border-radius: 6px;
-  background: var(--bg-elevated);
+.card-exposure-strip:hover {
+  background-color: var(--bg-panel-hover);
+  border-color: var(--border-default);
+}
+
+.exposure-strip-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+  flex: 1;
+}
+
+.exposure-specs {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.spec-dot {
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+
+.spec-val {
+  color: var(--text-primary);
+}
+
+.exposure-lens-text {
+  font-size: 10px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.exposure-fallback {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+.exposure-strip-arrow {
+  color: var(--text-tertiary);
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding-left: 2px;
+  transition: color 0.15s ease;
+}
+
+.card-exposure-strip:hover .exposure-strip-arrow {
+  color: var(--sony-orange);
+}
+
+/* 底部操作行 (黄金分割：左侧大主按钮，右侧 4 个标准小工具按钮) */
+.card-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.btn-card-primary {
+  flex: 1;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 650;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.btn-card-primary.btn-card-unlock {
+  background: var(--sony-orange);
+  border: 1px solid var(--sony-orange);
+  color: #ffffff;
+  box-shadow: 0 2px 6px var(--sony-orange-subtle);
+}
+
+.btn-card-primary.btn-card-unlock:hover:not(:disabled) {
+  background: var(--sony-orange-hover);
+  border-color: var(--sony-orange-hover);
+}
+
+.btn-card-primary.btn-card-unlock:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-card-primary.btn-card-save {
+  background: var(--status-success);
+  border: 1px solid var(--status-success);
+  color: #ffffff;
+}
+
+.btn-card-primary.btn-card-save:hover {
+  background: #047857;
+  border-color: #047857;
+}
+
+/* 右侧 4 个规整辅助按钮集合 */
+.card-tool-icons {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.btn-tool-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
+  background-color: var(--bg-elevated);
   border: 1px solid var(--border-default);
   color: var(--text-secondary);
   display: flex;
@@ -569,84 +732,19 @@
   justify-content: center;
   cursor: pointer;
   transition: all 0.15s ease;
+  padding: 0;
 }
 
-.btn-icon:hover {
-  background: var(--bg-panel-hover);
+.btn-tool-icon:hover {
+  background-color: var(--bg-panel-hover);
   color: var(--text-primary);
   border-color: var(--border-strong);
 }
 
-.btn-icon.btn-danger:hover {
-  background: rgba(220, 38, 38, 0.15);
+.btn-tool-icon.btn-tool-danger:hover {
+  background-color: rgba(220, 38, 38, 0.12);
   color: var(--status-danger);
   border-color: rgba(220, 38, 38, 0.35);
-}
-
-.btn-icon.btn-studio {
-  color: var(--sony-orange);
-}
-
-.btn-icon.btn-studio:hover {
-  background: var(--sony-orange-subtle);
-  border-color: var(--sony-orange-border);
-}
-
-.btn-icon.btn-extract-jpg {
-  color: var(--status-success);
-}
-
-.btn-icon.btn-extract-jpg:hover {
-  background: rgba(5, 150, 105, 0.12);
-  border-color: rgba(5, 150, 105, 0.35);
-}
-
-.btn-card-unlock {
-  flex: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  background: var(--sony-orange-subtle);
-  border: 1px solid var(--sony-orange-border);
-  color: var(--sony-orange);
-  font-size: 12px;
-  font-weight: 600;
-  padding: 6px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.btn-card-unlock:hover:not(:disabled) {
-  background: var(--sony-orange);
-  color: #ffffff;
-}
-
-.btn-card-unlock:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.btn-card-save {
-  flex: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  background: var(--status-success);
-  border: 1px solid transparent;
-  color: #ffffff;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 6px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.btn-card-save:hover {
-  background: #047857;
 }
 
 /* --------------------------------------------------------------------------

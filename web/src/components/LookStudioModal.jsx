@@ -412,6 +412,19 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
                 {photoItem.orientationInfo.label} {photoItem.orientationInfo.ratioTag}
               </span>
             )}
+            {photoItem.exifResult?.overview && (photoItem.exifResult.overview.fNumber || photoItem.exifResult.overview.exposureTimeString || photoItem.exifResult.overview.iso) && (
+              <span
+                className="studio-orient-tag"
+                style={{ opacity: 0.85 }}
+                title="曝光参数"
+              >
+                {[
+                  photoItem.exifResult.overview.fNumber ? `f/${photoItem.exifResult.overview.fNumber}` : null,
+                  photoItem.exifResult.overview.exposureTimeString,
+                  photoItem.exifResult.overview.iso ? `ISO ${photoItem.exifResult.overview.iso}` : null,
+                ].filter(Boolean).join(' · ')}
+              </span>
+            )}
           </div>
 
           <div className="studio-top-actions">

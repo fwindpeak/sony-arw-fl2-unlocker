@@ -4,7 +4,6 @@ import {
   Upload,
   Download,
   Trash2,
-  Eye,
   Archive,
   RefreshCw,
   Plus,
@@ -19,7 +18,8 @@ import {
   RectangleVertical,
   CheckCircle2,
   RotateCw,
-  FileImage
+  FileImage,
+  Info
 } from 'lucide-react';
 import JSZip from 'jszip';
 import {
@@ -33,8 +33,11 @@ import {
   detectImageOrientation,
   downloadJpegBytes
 } from './core/previewExtractor';
+import { parsePhotoExif } from './core/exifReader';
 import { SonyColorRenderer } from './core/sonyColorEngine';
 import LookStudioModal from './components/LookStudioModal';
+import ExifBadge from './components/ExifBadge';
+import ExifViewerModal from './components/ExifViewerModal';
 import './App.css';
 
 export default function App() {
@@ -58,9 +61,9 @@ export default function App() {
   const [isProcessingAll, setIsProcessingAll] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
-  const [inspectTarget, setInspectTarget] = useState(null);
   const [lightboxImg, setLightboxImg] = useState(null);
   const [studioTarget, setStudioTarget] = useState(null);
+  const [exifTarget, setExifTarget] = useState(null);
 
   const fileInputRef = useRef(null);
 
@@ -69,7 +72,7 @@ export default function App() {
     document.documentElement.setAttribute('data-theme', theme);
     try {
       localStorage.setItem('sony_arw_theme', theme);
-    } catch {}
+    } catch { }
   }, [theme]);
 
   const toggleTheme = () => {
@@ -103,6 +106,7 @@ export default function App() {
         let previewBytes = null;
         let hdBytes = null;
         let orientationInfo = null;
+        let exifResult = null;
 
         try {
           // 1. 切片 256KB 极速解析 ARW 结构元数据
@@ -130,6 +134,13 @@ export default function App() {
           console.warn('预览图解析提示:', e);
         }
 
+        try {
+          // 3. 参照 LensMark 解析完整 EXIF 元数据并提取硬件快门计数 (Sony Tag 0x9050 等)
+          exifResult = await parsePhotoExif(file);
+        } catch (e) {
+          console.warn('EXIF 与快门数解析提示:', e);
+        }
+
         return {
           id,
           file,
@@ -142,6 +153,7 @@ export default function App() {
           previewBytes,
           hdBytes,
           orientationInfo,
+          exifResult,
           processedBlobUrl: null,
           processedBuffer: null,
         };
@@ -241,13 +253,13 @@ export default function App() {
         prev.map((f) =>
           f.id === item.id
             ? {
-                ...f,
-                status: 'done',
-                info: updatedInfo,
-                processedBlobUrl: blobUrl,
-                processedBuffer: outputUint8,
-                previewUrl: newPreviewUrl || f.previewUrl,
-              }
+              ...f,
+              status: 'done',
+              info: updatedInfo,
+              processedBlobUrl: blobUrl,
+              processedBuffer: outputUint8,
+              previewUrl: newPreviewUrl || f.previewUrl,
+            }
             : f
         )
       );
@@ -443,7 +455,6 @@ export default function App() {
           </div>
           <div className="brand-title">
             <span className="brand-name">Sony ARW 创意外观工具</span>
-            <span className="brand-badge">FL2 / FL3</span>
           </div>
         </div>
 
@@ -656,7 +667,7 @@ export default function App() {
                         setStudioTarget(item);
                       }
                     }}
-                    title="点击打开调色室"
+                    title="点击打开外观调色暗房"
                   >
                     {item.previewUrl ? (
                       <img
@@ -677,54 +688,55 @@ export default function App() {
                       />
                     ) : (
                       <div className="card-thumb-placeholder">
-                        <Camera size={28} opacity={0.35} />
+                        <Camera size={26} opacity={0.35} />
                         <span>提取内嵌预览...</span>
                       </div>
                     )}
 
-                    {/* 画幅朝向与比例角标 (横向/纵向识别) */}
-                    {item.orientationInfo && (
-                      <div
-                        className={`thumb-badge-orientation ${item.orientationInfo.isPortrait ? 'badge-portrait' : 'badge-landscape'}`}
-                        title={`画面方向: ${item.orientationInfo.label} (${item.orientationInfo.ratioTag || ''})`}
-                      >
-                        {item.orientationInfo.isPortrait ? (
-                          <RectangleVertical size={11} />
-                        ) : (
-                          <RectangleHorizontal size={11} />
-                        )}
-                        <span>{item.orientationInfo.label} {item.orientationInfo.ratioTag}</span>
-                      </div>
-                    )}
+                    {/* 左上角轻量状态标 */}
+                    <div className="thumb-top-left-badges">
+                      {item.status === 'done' ? (
+                        <span className="thumb-pill-done">
+                          <Check size={11} />
+                          <span>已注入</span>
+                        </span>
+                      ) : item.orientationInfo ? (
+                        <span className="thumb-pill-neutral">
+                          {item.orientationInfo.isPortrait ? (
+                            <RectangleVertical size={10} />
+                          ) : (
+                            <RectangleHorizontal size={10} />
+                          )}
+                          <span>{item.orientationInfo.ratioTag || item.orientationInfo.label}</span>
+                        </span>
+                      ) : null}
+                    </div>
 
-                    {/* 相机型号与拍摄外观角标 */}
+                    {/* 右上角一体化机型与外观胶囊 */}
                     {item.info && (
-                      <div className="thumb-badges-meta">
-                        <span className="badge-model">{item.info.cameraModel}</span>
-                        <span className="badge-look">{item.info.activeLook}</span>
+                      <div className="thumb-top-right-badges">
+                        <span className="thumb-pill-meta">
+                          <span className="pill-model-name">{item.info.cameraModel}</span>
+                          <span className="pill-look-code">{item.info.activeLook}</span>
+                        </span>
                       </div>
                     )}
 
-                    {/* 调色室入口按钮 */}
+                    {/* 悬停平滑浮现的调色暗房入口 */}
                     {item.previewUrl && (
-                      <div className="thumb-studio-tag" title="打开调色室预览">
-                        <Palette size={11} />
-                        <span>外观调色</span>
-                      </div>
-                    )}
-
-                    {/* 完成状态覆盖层 */}
-                    {item.status === 'done' && (
-                      <div className="thumb-status-done">
-                        <Check size={14} />
-                        <span>外观已就绪</span>
+                      <div className="thumb-hover-overlay">
+                        <span className="thumb-hover-pill">
+                          <Palette size={13} />
+                          <span>调色暗房</span>
+                        </span>
                       </div>
                     )}
                   </div>
 
-                  {/* 卡片信息与操作行 */}
+                  {/* 卡片主体内容区 */}
                   <div className="card-body">
-                    <div className="card-meta">
+                    {/* 文件名与大小 */}
+                    <div className="card-title-row">
                       <div className="card-filename" title={item.name}>
                         {item.name}
                       </div>
@@ -733,68 +745,28 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className="card-actions">
-                      {item.previewUrl && (
-                        <button
-                          className="btn-icon btn-studio"
-                          onClick={() => setStudioTarget(item)}
-                          title="创意外观暗房调色"
-                          aria-label="创意外观暗房调色"
-                        >
-                          <Palette size={14} />
-                        </button>
-                      )}
+                    {/* 拍摄曝光参数行 (精简单行，点击直接打开 EXIF 详情) */}
+                    <ExifBadge
+                      exifResult={item.exifResult}
+                      onOpenExifModal={() => setExifTarget(item)}
+                    />
 
-                      {item.info && (
-                        <button
-                          className="btn-icon"
-                          onClick={() => setInspectTarget(item)}
-                          title="查看槽位元数据"
-                          aria-label="查看槽位元数据"
-                        >
-                          <Eye size={14} />
-                        </button>
-                      )}
-
-                      <button
-                        className="btn-icon btn-extract-jpg"
-                        onClick={() => handleExtractSingleJpeg(item)}
-                        title="提取内嵌高清 JPG 文件"
-                        aria-label="提取内嵌高清 JPG"
-                      >
-                        <FileImage size={14} />
-                      </button>
-
-                      <button
-                        className="btn-icon"
-                        onClick={() => handleToggleOrientation(item.id)}
-                        title="切换画幅方向 (横向 / 纵向)"
-                        aria-label="切换画幅方向"
-                      >
-                        <RotateCw size={13} />
-                      </button>
-
-                      <button
-                        className="btn-icon btn-danger"
-                        onClick={() => handleRemoveFile(item.id)}
-                        title="从列表中移除"
-                        aria-label="移除文件"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-
+                    {/* 底部操作工具栏 (左侧大主按钮，右侧 4 个标准辅助工具按钮) */}
+                    <div className="card-actions-row">
                       {item.status === 'done' ? (
                         <button
-                          className="btn-card-save"
+                          type="button"
+                          className="btn-card-primary btn-card-save"
                           onClick={() => handleDownloadSingle(item)}
-                          title="导出处理后的 ARW"
+                          title="导出注入外观后的 ARW 文件"
                         >
                           <Download size={13} />
-                          导出
+                          <span>导出 ARW</span>
                         </button>
                       ) : (
                         <button
-                          className="btn-card-unlock"
+                          type="button"
+                          className="btn-card-primary btn-card-unlock"
                           onClick={() => processSingleFile(item)}
                           disabled={item.status === 'processing' || isProcessingAll}
                         >
@@ -803,9 +775,51 @@ export default function App() {
                           ) : (
                             <CheckCircle2 size={13} />
                           )}
-                          注入
+                          <span>注入外观</span>
                         </button>
                       )}
+
+                      <div className="card-tool-icons">
+                        <button
+                          type="button"
+                          className="btn-tool-icon"
+                          onClick={() => handleExtractSingleJpeg(item)}
+                          title="提取内嵌全像素高清 JPG 原底"
+                          aria-label="提取高清 JPG"
+                        >
+                          <FileImage size={14} />
+                        </button>
+
+                        <button
+                          type="button"
+                          className="btn-tool-icon"
+                          onClick={() => handleToggleOrientation(item.id)}
+                          title="旋转纠偏画面方向 (90°)"
+                          aria-label="旋转方向"
+                        >
+                          <RotateCw size={13} />
+                        </button>
+
+                        <button
+                          type="button"
+                          className="btn-tool-icon"
+                          onClick={() => setExifTarget(item)}
+                          title="查看完整 EXIF 元数据与外观槽位结构"
+                          aria-label="元数据详情"
+                        >
+                          <Info size={14} />
+                        </button>
+
+                        <button
+                          type="button"
+                          className="btn-tool-icon btn-tool-danger"
+                          onClick={() => handleRemoveFile(item.id)}
+                          title="从队列中移除此文件"
+                          aria-label="移除文件"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -884,82 +898,6 @@ export default function App() {
         </div>
       )}
 
-      {/* 元数据与槽位结构检测弹窗 */}
-      {inspectTarget && inspectTarget.info && (
-        <div className="modal-overlay" onClick={() => setInspectTarget(null)}>
-          <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-head">
-              <div className="modal-title">
-                <Camera size={16} />
-                <h3>ARW 创意外观槽位结构</h3>
-              </div>
-              <button className="btn-close" onClick={() => setInspectTarget(null)} aria-label="关闭">
-                <X size={16} />
-              </button>
-            </div>
-
-            <div className="modal-info-grid">
-              <div className="info-cell">
-                <span className="info-k">机型</span>
-                <span className="info-v">{inspectTarget.info.cameraModel}</span>
-              </div>
-              <div className="info-cell">
-                <span className="info-k">拍摄外观</span>
-                <span className="info-v">{inspectTarget.info.activeLook}</span>
-              </div>
-              <div className="info-cell">
-                <span className="info-k">画面方向</span>
-                <span className="info-v">
-                  {inspectTarget.orientationInfo
-                    ? `${inspectTarget.orientationInfo.label} (${inspectTarget.orientationInfo.ratioTag || ''})`
-                    : '未识别'}
-                </span>
-              </div>
-              <div className="info-cell">
-                <span className="info-k">槽位状态</span>
-                <span className="info-v" style={{ color: 'var(--status-success)' }}>
-                  {inspectTarget.info.isFullyUnlocked ? '已注入 FL2/FL3' : '原机状态'}
-                </span>
-              </div>
-            </div>
-
-            <div className="table-wrap">
-              <table className="mini-table">
-                <thead>
-                  <tr>
-                    <th>槽位</th>
-                    <th>外观代码</th>
-                    <th>状态</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {inspectTarget.info.slots.map((s) => (
-                    <tr key={s.index}>
-                      <td className="font-mono">Slot {s.index}</td>
-                      <td>
-                        <strong
-                          style={{
-                            color:
-                              s.name === 'FL2'
-                                ? 'var(--sony-orange)'
-                                : s.name === 'FL3'
-                                ? 'var(--accent-teal)'
-                                : 'inherit',
-                          }}
-                        >
-                          {s.name}
-                        </strong>
-                      </td>
-                      <td>{s.status}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* 技术说明与指引弹窗 */}
       {showHelp && (
         <div className="modal-overlay" onClick={() => setShowHelp(false)}>
@@ -1013,6 +951,15 @@ export default function App() {
           onApplyToArw={processSingleFile}
         />
       )}
+
+      {/* 照片 EXIF 元数据与快门计数查看器 */}
+      <ExifViewerModal
+        isOpen={Boolean(exifTarget)}
+        onClose={() => setExifTarget(null)}
+        exifResult={exifTarget?.exifResult}
+        slotInfo={exifTarget?.info}
+        fileName={exifTarget?.name}
+      />
     </div>
   );
 }
