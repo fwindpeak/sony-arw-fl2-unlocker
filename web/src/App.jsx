@@ -54,7 +54,7 @@ export default function App() {
   const [targetModel, setTargetModel] = useState('a7c2');
   const [defaultLook, setDefaultLook] = useState('fl2');
   const [profileMode, setProfileMode] = useState('balanced');
-  const [wbOffset, setWbOffset] = useState('-400');
+  const [wbOffset, setWbOffset] = useState('0');
   const [isProcessingAll, setIsProcessingAll] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
@@ -540,10 +540,12 @@ export default function App() {
               value={wbOffset}
               onChange={(e) => setWbOffset(e.target.value)}
             >
-              <option value="-400">-400K (肤色通透 / 推荐)</option>
+              <option value="0">0K (保持原片色温 / 推荐)</option>
+              <option value="-400">-400K (肤色微冷去黄)</option>
               <option value="-200">-200K (自然微冷)</option>
               <option value="-600">-600K (清冷冷调)</option>
-              <option value="0">0K (保持原片色温)</option>
+              <option value="200">+200K (自然微暖)</option>
+              <option value="400">+400K (复古浓暖)</option>
             </select>
           </div>
 

@@ -53,11 +53,17 @@ export const PROFILE_MODES = {
 };
 
 export const WB_OFFSETS = {
+  '0': {
+    id: '0',
+    kelvin: 0,
+    name: '0K (保持原片色温 / 推荐)',
+    desc: '保留拍摄时的原始白平衡增益参数，杜绝画面不自然偏冷'
+  },
   '-400': {
     id: '-400',
     kelvin: -400,
-    name: '-400K (肤色通透 / 推荐)',
-    desc: '自动消除 FL2/FL3 原生偏暖胶片倾向，呈现通透白皙人像肤色'
+    name: '-400K (肤色微冷去黄)',
+    desc: '轻微消除 FL2/FL3 原生偏暖胶片倾向，呈现通透白皙人像肤色'
   },
   '-200': {
     id: '-200',
@@ -71,11 +77,17 @@ export const WB_OFFSETS = {
     name: '-600K (清冷冷调)',
     desc: '较大幅度降低色温，增强青蓝空气感'
   },
-  '0': {
-    id: '0',
-    kelvin: 0,
-    name: '0K (保持原拍摄色温)',
-    desc: '保留拍摄时的原始白平衡增益参数'
+  '200': {
+    id: '200',
+    kelvin: 200,
+    name: '+200K (自然微暖)',
+    desc: '轻度提升暖感，适合暖阳光影'
+  },
+  '400': {
+    id: '400',
+    kelvin: 400,
+    name: '+400K (复古浓暖)',
+    desc: '浓郁暖调，重现复古夕阳氛围'
   }
 };
 
@@ -335,7 +347,7 @@ export function cloneLookSlot(sr2Buf, sr2Offset, srcStart, dstStart, newNameStr)
   injectLookProfileBlock(sr2Buf, sr2Offset, sr2Buf.slice(srcStart, srcStart + BLOCK_SIZE), dstStart, newNameStr);
 }
 
-export function applyWhitebalanceOffset(raw, sr2Dec, sr2Offset, offsetKelvin = -400) {
+export function applyWhitebalanceOffset(raw, sr2Dec, sr2Offset, offsetKelvin = 0) {
   if (!offsetKelvin || Number(offsetKelvin) === 0) return 0;
   const numK = Number(offsetKelvin);
 
@@ -395,7 +407,7 @@ export function unlockAllCreativeLooks(
   profileMode = 'balanced',
   customFl2Bin = null,
   customFl3Bin = null,
-  wbOffset = -400
+  wbOffset = 0
 ) {
   const { offset, length, key } = findSr2Subifd(raw);
   const sr2Enc = raw.slice(offset, offset + length);
@@ -603,7 +615,7 @@ export function processArw(inputData, options = {}) {
   const customFl3Bin = options.customFl3Bin || null;
   const replacementJpegBytes = options.replacementJpegBytes || null;
 
-  const wbOffset = options.wbOffset !== undefined ? options.wbOffset : -400;
+  const wbOffset = options.wbOffset !== undefined ? options.wbOffset : 0;
 
   if (targetModel && targetModel !== 'keep' && TARGET_MODELS[targetModel] && TARGET_MODELS[targetModel].code) {
     const targetCode = TARGET_MODELS[targetModel].code;

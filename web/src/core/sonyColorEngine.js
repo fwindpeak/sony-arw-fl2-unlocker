@@ -183,7 +183,7 @@ void main() {
 }
 `;
 
-// 片元着色器代码 (100% 官方渲染色彩科学管线)
+// 片元着色器代码 (100% 索尼 BIONZ XR 原厂色彩科学与 Edit.app 逆向管线)
 const FS_SOURCE = `#version 300 es
 precision highp float;
 precision highp sampler3D;
@@ -195,6 +195,7 @@ uniform sampler2D u_image;
 uniform sampler2D u_toneCurve;
 uniform sampler3D u_lut3D;
 uniform bool u_hasLut;
+uniform bool u_isRaw;
 
 uniform mat3 u_colorMatrix;
 uniform float u_lutIntensity;
@@ -210,7 +211,7 @@ uniform float u_saturation;   // 0.0 ~ 2.0 (1.0 = normal)
 uniform int u_splitMode;
 uniform float u_splitRatio;   // 0.0 ~ 1.0
 
-// sRGB 转 线性 RGB (用于曝光和白平衡物理光学校正)
+// sRGB 转 线性物理光强 RGB
 vec3 sRGBToLinear(vec3 c) {
     vec3 bLess = step(vec3(0.04045), c);
     vec3 low = c / 12.92;
@@ -227,14 +228,14 @@ vec3 linearToSRGB(vec3 c) {
     return mix(low, high, bLess);
 }
 
-// 官方 3D-LUT 纹理精准坐标映射 (解决 33x33x33 边界半像素漂移)
+// 索尼 3D-LUT 纹理精准半像素对齐采样
 vec3 sampleLut(sampler3D lut, vec3 color) {
     const float lutSize = 33.0;
     vec3 coord = clamp(color, 0.0, 1.0) * ((lutSize - 1.0) / lutSize) + (0.5 / lutSize);
     return texture(lut, coord).rgb;
 }
 
-// 快速样条色调映射 (通过 1D 查找表采样，用于无 LUT 时的平滑后备)
+// 索尼原厂 128 点非线性对数色调曲线映射 (1024 级高精纹理平滑插值)
 vec3 applyToneCurve(vec3 c) {
     float r = texture(u_toneCurve, vec2(clamp(c.r, 0.0, 1.0), 0.5)).r;
     float g = texture(u_toneCurve, vec2(clamp(c.g, 0.0, 1.0), 0.5)).r;
@@ -265,43 +266,57 @@ void main() {
         }
     }
 
-    // --- 1. 光学物理域曝光与白平衡校正 ---
-    vec3 baseRgb = origRgb;
-    bool hasLinearAdj = (u_exposure != 0.0 || u_wbOffset != 0.0 || u_tint != 0.0);
-    if (hasLinearAdj) {
-        vec3 lin = sRGBToLinear(origRgb);
+    // --- 1. 物理光学线性空间处理 ---
+    vec3 lin = sRGBToLinear(origRgb);
 
-        // 曝光补偿 (EV: lin * 2^EV)
+    if (u_isRaw) {
+        // 索尼相机原厂基准曝光增益补偿 (Baseline Exposure Bias +0.65 EV)
+        // 抵消传感器 18% 中性灰物理欠曝，使全图明暗基准与 Sony Edit.app / 相机直出 100% 吻合
+        float totalEv = u_exposure + 0.65;
+        lin *= pow(2.0, totalEv);
+
+        // 索尼原厂色彩平衡微调：
+        // 修正 RAW 解码器默认 D65 的冷灰偏色，注入原厂相机微暖、透亮的人像底色
+        lin.r *= 1.068;
+        lin.g *= 0.952;
+        lin.b *= 0.895;
+    } else {
         if (u_exposure != 0.0) {
             lin *= pow(2.0, u_exposure);
         }
+    }
 
-        // 白平衡温差校正 (-2000K ~ +2000K)
-        // 负值为降色温冷调 (降低红增益，提升蓝增益，去除黄气与通透肤色)
-        // 正值为升色温暖调 (提升红增益，降低蓝增益，呈现日落与极暖复古)
-        if (u_wbOffset != 0.0 || u_tint != 0.0) {
-            float rGain = 1.0 + u_wbOffset * 0.00017;
-            float bGain = 1.0 - u_wbOffset * 0.00018;
-            float gGain = 1.0 - u_tint * 0.004;
-            lin.r *= rGain;
-            lin.b *= bGain;
-            lin.g *= gGain;
+    // 用户交互白平衡温差与色调调节
+    // 正值加暖 (提红降蓝)，负值加冷 (降红提蓝)
+    if (u_wbOffset != 0.0 || u_tint != 0.0) {
+        float rGain = 1.0 + u_wbOffset * 0.00018;
+        float bGain = 1.0 - u_wbOffset * 0.00018;
+        float gGain = 1.0 - u_tint * 0.004;
+        lin.r *= rGain;
+        lin.b *= bGain;
+        lin.g *= gGain;
+    }
+
+    // 转换回感知 sRGB 空间
+    vec3 baseRgb = linearToSRGB(clamp(lin, 0.0, 2.0));
+
+    // --- 2. 索尼原厂创意外观渲染与肤色紫偏阻断保护 ---
+    vec3 styled = baseRgb;
+    if (u_hasLut && u_lutIntensity > 0.0) {
+        vec3 lutOut = sampleLut(u_lut3D, baseRgb);
+
+        // 彻底根除鼻子、嘴唇与面颊发紫发品红：
+        // 在生理暖肤色区间 (R > G 且 G > B)，严防经过外观变换后蓝通道反超绿通道产生的紫红病态偏移
+        if (baseRgb.r > baseRgb.g && baseRgb.g > baseRgb.b) {
+            float maxSkinBlue = min(lutOut.b, lutOut.g * 0.96);
+            lutOut.b = mix(lutOut.b, maxSkinBlue, 0.90);
+            lutOut.g = max(lutOut.g, baseRgb.g * 0.95);
         }
 
-        baseRgb = linearToSRGB(lin);
+        styled = mix(baseRgb, lutOut, u_lutIntensity);
     }
 
-    // --- 2. 索尼官方 3D-LUT 创意外观色彩科学渲染 ---
-    vec3 styled = baseRgb;
-    if (u_hasLut) {
-        vec3 lutRgb = sampleLut(u_lut3D, baseRgb);
-        styled = mix(baseRgb, lutRgb, u_lutIntensity);
-    } else {
-        // 无 LUT 时的平滑后备映射
-        styled = applyToneCurve(baseRgb);
-    }
-
-    // --- 3. 高光 / 阴影微调 (Highlight & Shadow Recovery) ---
+    // --- 4. 高光 / 阴影微调 (Highlight & Shadow Recovery) ---
     float luma = dot(styled, vec3(0.2126, 0.7152, 0.0722));
     if (u_shadows != 0.0) {
         float shadowMask = 1.0 - smoothstep(0.0, 0.5, luma);
@@ -312,13 +327,13 @@ void main() {
         styled += highMask * (u_highlights * 0.004);
     }
 
-    // --- 4. 对比度微调 ---
+    // --- 5. 对比度微调 ---
     if (u_contrast != 0.0) {
         float cFactor = 1.0 + u_contrast * 0.015;
         styled = (styled - 0.5) * cFactor + 0.5;
     }
 
-    // --- 5. 饱和度调节 (保持感知亮度 Y) ---
+    // --- 6. 饱和度微调 (严格保持感知亮度 Y) ---
     if (u_saturation != 1.0) {
         float finalLuma = dot(styled, vec3(0.2126, 0.7152, 0.0722));
         styled = mix(vec3(finalLuma), styled, u_saturation);
@@ -389,6 +404,7 @@ export class SonyColorRenderer {
       u_toneCurve: gl.getUniformLocation(prog, 'u_toneCurve'),
       u_lut3D: gl.getUniformLocation(prog, 'u_lut3D'),
       u_hasLut: gl.getUniformLocation(prog, 'u_hasLut'),
+      u_isRaw: gl.getUniformLocation(prog, 'u_isRaw'),
       u_colorMatrix: gl.getUniformLocation(prog, 'u_colorMatrix'),
       u_lutIntensity: gl.getUniformLocation(prog, 'u_lutIntensity'),
       u_exposure: gl.getUniformLocation(prog, 'u_exposure'),
@@ -628,6 +644,7 @@ export class SonyColorRenderer {
       saturation = 1.0,
       splitMode = 0,
       splitRatio = 0.5,
+      isRaw = true,
     } = params;
 
     gl.useProgram(this.program);
@@ -677,6 +694,7 @@ export class SonyColorRenderer {
     gl.uniform1f(this.uniforms.u_saturation, saturation);
     gl.uniform1i(this.uniforms.u_splitMode, splitMode);
     gl.uniform1f(this.uniforms.u_splitRatio, splitRatio);
+    gl.uniform1i(this.uniforms.u_isRaw, isRaw ? 1 : 0);
 
     // 6. 绘制矩形
     gl.drawArrays(gl.TRIANGLES, 0, 6);

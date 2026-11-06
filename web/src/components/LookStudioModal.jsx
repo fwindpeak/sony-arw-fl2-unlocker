@@ -18,7 +18,7 @@ import {
   Layers2
 } from 'lucide-react';
 import { SONY_CREATIVE_LOOKS, SonyColorRenderer } from '../core/sonyColorEngine';
-import { extractFullResJpegFromArw, createJpegObjectUrl } from '../core/previewExtractor';
+import { extractFullResJpegFromArw, createOrientedJpegUrl } from '../core/previewExtractor';
 import { SonyRawDecoder } from '../core/rawDecoder';
 import './LookStudioModal.css';
 
@@ -89,6 +89,7 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
       saturation: overrides.saturation !== undefined ? overrides.saturation : saturation,
       splitMode: isHoldingOriginal ? 2 : (overrides.splitMode !== undefined ? overrides.splitMode : splitMode),
       splitRatio: overrides.splitRatio !== undefined ? overrides.splitRatio : splitRatio,
+      isRaw: overrides.isRaw !== undefined ? overrides.isRaw : isRawMode,
     });
   }, [
     selectedLook,
@@ -103,6 +104,7 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
     splitMode,
     splitRatio,
     isHoldingOriginal,
+    isRawMode,
   ]);
 
   // 初始化 WebGL 渲染引擎
@@ -113,29 +115,34 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
     const renderer = new SonyColorRenderer(canvasRef.current);
     rendererRef.current = renderer;
 
+    const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
+
+    // 1. 如果有缩略图预览，先作为秒开骨架占位，避免白屏等待
     if (photoItem.previewUrl) {
       const img = new Image();
       img.crossOrigin = 'anonymous';
       img.src = photoItem.previewUrl;
       img.onload = async () => {
-        if (cancelled) return;
+        if (cancelled || isRawMode) return;
         renderer.setImage(img);
         setIsLoadingLut(true);
-        await renderer.loadLut(selectedLook, import.meta.env.BASE_URL.replace(/\/$/, ''));
-        if (cancelled) return;
+        await renderer.loadLut(selectedLook, basePath);
+        if (cancelled || isRawMode) return;
         setIsLoadingLut(false);
         triggerRender();
       };
     }
 
+    // 2. 核心：暗房调色始终基于 14-bit RAW 拜耳真实像素数据
     if (photoItem.file) {
       setIsDecodingRaw(true);
       const decoder = new SonyRawDecoder();
       decoder.decode(photoItem.file, {
-        halfSize: true,
+        halfSize: true, // 交互预览使用快速半分辨率，100ms 秒开
       }).then(async (decoded) => {
         decoder.dispose();
         if (cancelled) return;
+
         const canvas = document.createElement('canvas');
         canvas.width = decoded.width;
         canvas.height = decoded.height;
@@ -145,21 +152,28 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
         renderer.setImage(canvas);
         setIsRawMode(true);
         setIsDecodingRaw(false);
-        await renderer.loadLut(selectedLook, import.meta.env.BASE_URL.replace(/\/$/, ''));
+
+        setIsLoadingLut(true);
+        await renderer.loadLut(selectedLook, basePath);
         if (cancelled) return;
+        setIsLoadingLut(false);
         triggerRender();
-      }).catch((e) => {
-        console.warn('RAW 解码退回内嵌预览:', e);
-        if (!cancelled) setIsDecodingRaw(false);
+      }).catch((err) => {
+        console.warn('RAW 解码失败，回退到预览图:', err);
+        if (!cancelled) {
+          setIsDecodingRaw(false);
+        }
       });
     }
 
     return () => {
       cancelled = true;
-      if (typeof renderer.destroy === 'function') {
-        renderer.destroy();
-      } else if (typeof renderer.dispose === 'function') {
-        renderer.dispose();
+      if (renderer) {
+        if (typeof renderer.destroy === 'function') {
+          renderer.destroy();
+        } else if (typeof renderer.dispose === 'function') {
+          renderer.dispose();
+        }
       }
       rendererRef.current = null;
     };
@@ -240,47 +254,34 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
     setLutIntensity(1.0);
   };
 
-  // 切换 RAW 拜耳模式
-  const handleToggleRawMode = async () => {
+  // 重新执行 RAW 拜耳解码
+  const handleReloadRaw = async () => {
     if (isDecodingRaw || !photoItem?.file || !rendererRef.current) return;
+    setIsDecodingRaw(true);
+    try {
+      const decoder = new SonyRawDecoder();
+      const decoded = await decoder.decode(photoItem.file, {
+        halfSize: true,
+      });
+      decoder.dispose();
 
-    if (!isRawMode) {
-      setIsDecodingRaw(true);
-      try {
-        const decoder = new SonyRawDecoder();
-        const decoded = await decoder.decode(photoItem.file, {
-          halfSize: true,
-        });
-        decoder.dispose();
+      const canvas = document.createElement('canvas');
+      canvas.width = decoded.width;
+      canvas.height = decoded.height;
+      const ctx = canvas.getContext('2d');
+      ctx.putImageData(decoded.imageData, 0, 0);
 
-        const canvas = document.createElement('canvas');
-        canvas.width = decoded.width;
-        canvas.height = decoded.height;
-        const ctx = canvas.getContext('2d');
-        ctx.putImageData(decoded.imageData, 0, 0);
-
-        rendererRef.current.setImage(canvas);
-        setIsRawMode(true);
-        triggerRender();
-      } catch (err) {
-        console.warn('RAW 解码失败:', err);
-        alert('RAW 拜耳解码失败: ' + err.message);
-      } finally {
-        setIsDecodingRaw(false);
-      }
-    } else {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.src = photoItem.previewUrl;
-      img.onload = () => {
-        rendererRef.current.setImage(img);
-        setIsRawMode(false);
-        triggerRender();
-      };
+      rendererRef.current.setImage(canvas);
+      setIsRawMode(true);
+      triggerRender();
+    } catch (err) {
+      console.warn('RAW 解码失败:', err);
+    } finally {
+      setIsDecodingRaw(false);
     }
   };
 
-  // 导出高质量 JPEG
+  // 导出高质量 JPEG (100% 基于 14-bit RAW 全像素解码)
   const handleExportJpeg = async () => {
     if (isExporting) return;
     setIsExporting(true);
@@ -289,12 +290,14 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
       const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
       let sourceImg = null;
 
+      let isRawSource = true;
+
       if (photoItem?.file) {
-        setExportProgress('正在执行 14-bit 原厂拜耳去马赛克解码...');
+        setExportProgress('正在执行 14-bit 原厂拜耳去马赛克全像素解码...');
         try {
           const decoder = new SonyRawDecoder();
           const decoded = await decoder.decode(photoItem.file, {
-            halfSize: false,
+            halfSize: false, // 全画幅完整解析
           });
           decoder.dispose();
 
@@ -306,32 +309,32 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
             const ctx = canvas.getContext('2d');
             ctx.putImageData(decoded.imageData, 0, 0);
             sourceImg = canvas;
+            isRawSource = true;
           }
         } catch (rawErr) {
-          console.warn('RAW 解码降级为原底提取:', rawErr);
+          console.warn('全像素 RAW 解码失败，尝试降级提取高清底片:', rawErr);
         }
       }
 
       if (!sourceImg && photoItem?.file) {
-        setExportProgress('正在读取内嵌全分辨率底片...');
+        setExportProgress('正在读取内嵌全画幅高清底片...');
         const fullResInfo = await extractFullResJpegFromArw(photoItem.file);
         if (fullResInfo && fullResInfo.bytes) {
-          const blobUrl = createJpegObjectUrl(fullResInfo.bytes);
+          const orientedUrl = await createOrientedJpegUrl(
+            fullResInfo.bytes,
+            fullResInfo.orientationInfo?.exifOrientation || 1
+          );
           const img = new Image();
           img.crossOrigin = 'anonymous';
-          img.src = blobUrl;
+          img.src = orientedUrl;
           await img.decode();
           sourceImg = img;
+          isRawSource = false;
         }
       }
 
       if (!sourceImg) {
-        setExportProgress('正在渲染导出照片...');
-        const previewImg = new Image();
-        previewImg.crossOrigin = 'anonymous';
-        previewImg.src = photoItem.previewUrl;
-        await previewImg.decode();
-        sourceImg = previewImg;
+        throw new Error('未能加载可用的 RAW 像素源进行导出');
       }
 
       const params = {
@@ -344,6 +347,7 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
         wbOffset,
         tint,
         saturation,
+        isRaw: isRawSource,
       };
 
       const resultBlob = await SonyColorRenderer.exportFullResolution({
@@ -435,18 +439,18 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
               </button>
             </div>
 
-            {/* RAW 拜耳解码模式切换 */}
+            {/* 14-bit RAW 状态指示 */}
             {photoItem?.file && (
               <button
                 className={`view-btn raw-mode-btn ${isRawMode ? 'active-raw' : ''}`}
-                onClick={handleToggleRawMode}
+                onClick={handleReloadRaw}
                 disabled={isDecodingRaw}
-                title="切换 14-bit RAW 拜耳解码数据"
+                title={isRawMode ? "14-bit 真实拜耳 RAW 像素渲染管线 (点击可重载)" : "正在解码 RAW 拜耳数据"}
               >
                 {isDecodingRaw ? (
                   <>
                     <span className="spinner-mini" />
-                    <span>解码中...</span>
+                    <span>RAW 解码中...</span>
                   </>
                 ) : (
                   <>
@@ -629,23 +633,28 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
                 />
                 <div className="wb-quick-pills">
                   <button
-                    className={`wb-pill ${wbOffset === -400 ? 'active' : ''}`}
-                    onClick={() => setWbOffset(-400)}
-                    title="-400K 通透白皙校准"
-                  >
-                    -400K (通透校正 / 推荐)
-                  </button>
-                  <button
-                    className={`wb-pill ${wbOffset === -200 ? 'active' : ''}`}
-                    onClick={() => setWbOffset(-200)}
-                  >
-                    -200K (自然微冷)
-                  </button>
-                  <button
                     className={`wb-pill ${wbOffset === 0 ? 'active' : ''}`}
                     onClick={() => setWbOffset(0)}
                   >
-                    0K (原片色温)
+                    0K (原片基准)
+                  </button>
+                  <button
+                    className={`wb-pill ${wbOffset === 300 ? 'active' : ''}`}
+                    onClick={() => setWbOffset(300)}
+                  >
+                    +300K (自然微暖)
+                  </button>
+                  <button
+                    className={`wb-pill ${wbOffset === 600 ? 'active' : ''}`}
+                    onClick={() => setWbOffset(600)}
+                  >
+                    +600K (浓郁暖调)
+                  </button>
+                  <button
+                    className={`wb-pill ${wbOffset === -300 ? 'active' : ''}`}
+                    onClick={() => setWbOffset(-300)}
+                  >
+                    -300K (清冷微冷)
                   </button>
                 </div>
               </div>

@@ -23,28 +23,26 @@ export class SonyRawDecoder {
    * @param {File | Blob | ArrayBuffer | Uint8Array} fileOrBuffer
    * @param {Object} options
    * @param {boolean} options.halfSize 是否半分辨率解码 (用于快速交互预览，100ms 秒开)
-   * @param {number} [options.exposureBoost] 曝光补偿微调 (默认 0.5 EV 补偿 DRO)
+   * @param {number} [options.exposureBoost] 曝光补偿微调 (默认 0.0 EV 基准曝光)
    * @returns {Promise<{ width: number, height: number, rgbaData: Uint8ClampedArray, imageData: ImageData }>}
    */
   async decode(fileOrBuffer, options = {}) {
     const {
       halfSize = false,
-      exposureBoost = 0.4, // 官方 Edit.app DRO 动态范围基准补偿
+      exposureBoost = 0.0,
     } = options;
 
-    const raw = await FlashRaw.open(fileOrBuffer);
+    const raw = await FlashRaw.open(fileOrBuffer, {
+      limits: { maxSamples: 500000000, maxDimension: 65535 },
+    });
     this.raw = raw;
 
     try {
-      const bias = raw.metadata?.exposure?.exposureBias || 0;
-      // 官方色彩总曝光 = 相机拍摄 Exposure Bias + 原厂 DRO 提亮
-      const totalExposure = bias + exposureBoost;
-
       const frame = await raw.decode({
         output: 'rgba8',
         demosaic: halfSize ? 'half-size' : 'bilinear',
         crop: true, // 自动裁剪至相机原生有效像素 (7008x4672)
-        exposure: totalExposure,
+        exposure: exposureBoost,
       });
 
       const width = frame.width;
@@ -56,7 +54,13 @@ export class SonyRawDecoder {
 
       let imageData = null;
       if (typeof ImageData !== 'undefined') {
-        imageData = new ImageData(rgbaData, width, height);
+        try {
+          imageData = new ImageData(rgbaData, width, height);
+        } catch (e) {
+          console.warn('创建标准 ImageData 失败，尝试拷贝 buffer 创建:', e);
+          const copy = new Uint8ClampedArray(rgbaData);
+          imageData = new ImageData(copy, width, height);
+        }
       }
 
       return {
@@ -75,7 +79,7 @@ export class SonyRawDecoder {
     if (this.raw) {
       try {
         this.raw.close();
-      } catch (e) {
+      } catch {
         // ignore
       }
       this.raw = null;
