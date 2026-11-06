@@ -10,6 +10,7 @@
  */
 
 import toneCurvesData from './sonyToneCurves.json';
+import { buildTiff16Blob } from './tiffExporter.js';
 
 // 全套 12 种创意外观原厂元数据与矩阵 (Tag 0x7800，基数 1024.0)
 export const SONY_CREATIVE_LOOKS = {
@@ -269,21 +270,9 @@ void main() {
     // --- 1. 物理光学线性空间处理 ---
     vec3 lin = sRGBToLinear(origRgb);
 
-    if (u_isRaw) {
-        // 索尼相机原厂基准曝光增益补偿 (Baseline Exposure Bias +0.65 EV)
-        // 抵消传感器 18% 中性灰物理欠曝，使全图明暗基准与 Sony Edit.app / 相机直出 100% 吻合
-        float totalEv = u_exposure + 0.65;
-        lin *= pow(2.0, totalEv);
-
-        // 索尼原厂色彩平衡微调：
-        // 修正 RAW 解码器默认 D65 的冷灰偏色，注入原厂相机微暖、透亮的人像底色
-        lin.r *= 1.068;
-        lin.g *= 0.952;
-        lin.b *= 0.895;
-    } else {
-        if (u_exposure != 0.0) {
-            lin *= pow(2.0, u_exposure);
-        }
+    // 线性空间曝光调节 (精准真实物理增益，0 EV 严格保持原片中性灰，绝不擅自过曝)
+    if (u_exposure != 0.0) {
+        lin *= pow(2.0, u_exposure);
     }
 
     // 用户交互白平衡温差与色调调节
@@ -339,7 +328,14 @@ void main() {
         styled = mix(vec3(finalLuma), styled, u_saturation);
     }
 
-    fragColor = vec4(clamp(styled, 0.0, 1.0), 1.0);
+    // --- 7. 胶片感高光软滚降 (Soft-Knee Highlight Roll-off) ---
+    // 在接近高光边界 (0.80~1.0) 时平滑过渡压缩，极大扩展高光保留细节，杜绝死白生硬过曝切边与断层
+    vec3 threshold = vec3(0.80);
+    vec3 excess = max(vec3(0.0), styled - threshold);
+    vec3 compressed = excess / (vec3(1.0) + excess * 1.5);
+    vec3 finalRgb = min(styled, threshold + compressed * (vec3(1.0) - threshold));
+
+    fragColor = vec4(clamp(finalRgb, 0.0, 1.0), 1.0);
 }
 `;
 
@@ -508,8 +504,12 @@ export class SonyColorRenderer {
     }
   }
 
-  // 载入待渲染的照片源 (HTMLImageElement 或 ImageBitmap)
+  // 载入待渲染的照片源 (HTMLImageElement 或 ImageBitmap 或 HTMLCanvasElement)
   setImage(img) {
+    if (img && img.rgb16Data && img.width && img.height) {
+      return this.setImage16(img.rgb16Data, img.width, img.height);
+    }
+
     const gl = this.gl;
     if (!this.imageTexture) {
       this.imageTexture = gl.createTexture();
@@ -529,6 +529,54 @@ export class SonyColorRenderer {
     this.canvas.width = this.imageWidth;
     this.canvas.height = this.imageHeight;
     gl.viewport(0, 0, this.imageWidth, this.imageHeight);
+  }
+
+  /**
+   * 载入 16-bit 原生高精度色彩源 (Uint16Array RGB, 65536 阶/通道)
+   * 采用 WebGL2 RGBA16F 纹理直通 16-bit 浮点着色管线，彻底消除 8-bit 色彩断层与死白过曝
+   */
+  setImage16(rgb16Data, width, height) {
+    const gl = this.gl;
+    if (!this.imageTexture) {
+      this.imageTexture = gl.createTexture();
+    }
+
+    gl.bindTexture(gl.TEXTURE_2D, this.imageTexture);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+
+    // 将 16 位整型数据转化为带真实 16 阶精度的归一化浮点数组
+    const len = width * height;
+    const rgbaFloat = new Float32Array(len * 4);
+    const inv65535 = 1.0 / 65535.0;
+    for (let i = 0, j = 0; i < len; i++, j += 3) {
+      const dst = i << 2;
+      rgbaFloat[dst] = rgb16Data[j] * inv65535;
+      rgbaFloat[dst + 1] = rgb16Data[j + 1] * inv65535;
+      rgbaFloat[dst + 2] = rgb16Data[j + 2] * inv65535;
+      rgbaFloat[dst + 3] = 1.0;
+    }
+
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA16F,
+      width,
+      height,
+      0,
+      gl.RGBA,
+      gl.FLOAT,
+      rgbaFloat
+    );
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+    this.imageWidth = width;
+    this.imageHeight = height;
+    this.canvas.width = width;
+    this.canvas.height = height;
+    gl.viewport(0, 0, width, height);
   }
 
   // 静态解析缓存，避免多次重复 fetch 与解析
@@ -764,6 +812,127 @@ export class SonyColorRenderer {
           'image/jpeg',
           quality
         );
+      });
+    } finally {
+      renderer.destroy();
+    }
+  }
+
+  /**
+   * 静态离屏全分辨率渲染并导出为 16-bit 无损 TIFF Blob (完整施加创意外观 3D-LUT 与调色参数)
+   * @param {Object} options
+   * @param {HTMLImageElement | ImageBitmap | HTMLCanvasElement} options.fullImg 全分辨率图像源
+   * @param {Object} options.params 调色参数 (look, lutIntensity, exposure, contrast, highlights, shadows, wbOffset, tint, saturation...)
+   * @param {string} [options.basePath=''] 静态资源根路径
+   * @param {string} [options.make='Sony'] 相机品牌
+   * @param {string} [options.model='ILCE-7C2'] 相机型号
+   * @returns {Promise<Blob>}
+   */
+  static async exportFullResolutionTiff16({
+    fullImg,
+    params,
+    basePath = '',
+    make = 'Sony',
+    model = 'ILCE-7C2',
+  }) {
+    const origWidth = fullImg.naturalWidth || fullImg.width;
+    const origHeight = fullImg.naturalHeight || fullImg.height;
+
+    // 创建离屏 Canvas
+    const exportCanvas = document.createElement('canvas');
+    exportCanvas.width = origWidth;
+    exportCanvas.height = origHeight;
+
+    const renderer = new SonyColorRenderer(exportCanvas);
+    if (!renderer.gl) {
+      throw new Error('离屏 WebGL2 上下文初始化失败');
+    }
+
+    try {
+      renderer.setImage(fullImg);
+      await renderer.loadLut(params.look || 'FL2', basePath);
+
+      const gl = renderer.gl;
+      let rgb16 = null;
+
+      // 尝试使用 EXT_color_buffer_float 获得 16/32 位高动态无损浮点像素
+      const extFloat = gl.getExtension('EXT_color_buffer_float');
+      if (extFloat) {
+        try {
+          const fbo = gl.createFramebuffer();
+          gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+          const fTex = gl.createTexture();
+          gl.bindTexture(gl.TEXTURE_2D, fTex);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, origWidth, origHeight, 0, gl.RGBA, gl.HALF_FLOAT, null);
+          gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, fTex, 0);
+
+          if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
+            gl.viewport(0, 0, origWidth, origHeight);
+            renderer.render({
+              ...params,
+              splitMode: 0,
+              splitRatio: 1.0,
+            });
+
+            const floatPixels = new Float32Array(origWidth * origHeight * 4);
+            gl.readPixels(0, 0, origWidth, origHeight, gl.RGBA, gl.FLOAT, floatPixels);
+
+            rgb16 = new Uint16Array(origWidth * origHeight * 3);
+            for (let y = 0; y < origHeight; y++) {
+              const glRow = (origHeight - 1 - y) * origWidth * 4;
+              const tiffRow = y * origWidth * 3;
+              for (let x = 0; x < origWidth; x++) {
+                const srcIdx = glRow + (x << 2);
+                const dstIdx = tiffRow + x * 3;
+                rgb16[dstIdx] = Math.max(0, Math.min(65535, Math.round(floatPixels[srcIdx] * 65535.0)));
+                rgb16[dstIdx + 1] = Math.max(0, Math.min(65535, Math.round(floatPixels[srcIdx + 1] * 65535.0)));
+                rgb16[dstIdx + 2] = Math.max(0, Math.min(65535, Math.round(floatPixels[srcIdx + 2] * 65535.0)));
+              }
+            }
+          }
+          gl.deleteTexture(fTex);
+          gl.deleteFramebuffer(fbo);
+        } catch (fboErr) {
+          console.warn('Float FBO 读取异常，回退至基础深度读取:', fboErr);
+          rgb16 = null;
+        }
+      }
+
+      if (!rgb16) {
+        // 回退机制：从标准绘图缓冲直接提取并扩展至 16-bit
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, origWidth, origHeight);
+        renderer.render({
+          ...params,
+          splitMode: 0,
+          splitRatio: 1.0,
+        });
+
+        const u8Pixels = new Uint8Array(origWidth * origHeight * 4);
+        gl.readPixels(0, 0, origWidth, origHeight, gl.RGBA, gl.UNSIGNED_BYTE, u8Pixels);
+
+        rgb16 = new Uint16Array(origWidth * origHeight * 3);
+        for (let y = 0; y < origHeight; y++) {
+          const glRow = (origHeight - 1 - y) * origWidth * 4;
+          const tiffRow = y * origWidth * 3;
+          for (let x = 0; x < origWidth; x++) {
+            const srcIdx = glRow + (x << 2);
+            const dstIdx = tiffRow + x * 3;
+            rgb16[dstIdx] = u8Pixels[srcIdx] * 257;
+            rgb16[dstIdx + 1] = u8Pixels[srcIdx + 1] * 257;
+            rgb16[dstIdx + 2] = u8Pixels[srcIdx + 2] * 257;
+          }
+        }
+      }
+
+      return buildTiff16Blob({
+        width: origWidth,
+        height: origHeight,
+        rgb16Data: rgb16,
+        make,
+        model,
+        software: 'Sony ARW Pro Studio',
+        description: `Sony ${params.look || 'FL2'} 16-bit Master TIFF`,
       });
     } finally {
       renderer.destroy();

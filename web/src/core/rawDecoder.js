@@ -30,6 +30,7 @@ export class SonyRawDecoder {
     const {
       halfSize = false,
       exposureBoost = 0.0,
+      output = 'rgb16', // 默认输出 16-bit 真实高动态色彩数据 (65536 阶/通道)
     } = options;
 
     const raw = await FlashRaw.open(fileOrBuffer, {
@@ -39,7 +40,7 @@ export class SonyRawDecoder {
 
     try {
       const frame = await raw.decode({
-        output: 'rgba8',
+        output,
         demosaic: halfSize ? 'half-size' : 'bilinear',
         crop: true, // 自动裁剪至相机原生有效像素 (7008x4672)
         exposure: exposureBoost,
@@ -47,10 +48,22 @@ export class SonyRawDecoder {
 
       const width = frame.width;
       const height = frame.height;
-      const rgbaData =
-        frame.data instanceof Uint8ClampedArray
-          ? frame.data
-          : new Uint8ClampedArray(frame.data.buffer, frame.data.byteOffset, frame.data.byteLength);
+      const rgb16Data = frame.data instanceof Uint16Array ? frame.data : null;
+
+      // 生成兼顾标准 2D Canvas 与常规 DOM 渲染的 8-bit RGBA 缓冲区
+      const len = width * height;
+      const rgbaData = new Uint8ClampedArray(len * 4);
+      if (rgb16Data) {
+        for (let i = 0, j = 0; i < len; i++, j += 3) {
+          const dst = i << 2;
+          rgbaData[dst] = rgb16Data[j] >> 8;
+          rgbaData[dst + 1] = rgb16Data[j + 1] >> 8;
+          rgbaData[dst + 2] = rgb16Data[j + 2] >> 8;
+          rgbaData[dst + 3] = 255;
+        }
+      } else if (frame.data instanceof Uint8ClampedArray) {
+        rgbaData.set(frame.data);
+      }
 
       let imageData = null;
       if (typeof ImageData !== 'undefined') {
@@ -66,6 +79,7 @@ export class SonyRawDecoder {
       return {
         width,
         height,
+        rgb16Data,
         rgbaData,
         imageData,
       };

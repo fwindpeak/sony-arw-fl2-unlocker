@@ -764,6 +764,11 @@
   border-color: var(--border-strong);
 }
 
+.btn-tool-icon:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .btn-tool-icon.btn-tool-danger:hover {
   background-color: rgba(220, 38, 38, 0.12);
   color: var(--status-danger);

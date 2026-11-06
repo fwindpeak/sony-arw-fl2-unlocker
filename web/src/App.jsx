@@ -19,6 +19,7 @@ import {
   CheckCircle2,
   RotateCw,
   FileImage,
+  FileStack,
   Info,
   Gauge
 } from 'lucide-react';
@@ -35,7 +36,9 @@ import {
   downloadJpegBytes
 } from './core/previewExtractor';
 import { parsePhotoExif } from './core/exifReader';
+import { downloadBlob } from './core/tiffExporter';
 import { SonyColorRenderer } from './core/sonyColorEngine';
+import { SonyRawDecoder } from './core/rawDecoder';
 import LookStudioModal from './components/LookStudioModal';
 import ExifBadge from './components/ExifBadge';
 import ExifViewerModal from './components/ExifViewerModal';
@@ -60,6 +63,7 @@ export default function App() {
   const [profileMode, setProfileMode] = useState('balanced');
   const [wbOffset, setWbOffset] = useState('0');
   const [isProcessingAll, setIsProcessingAll] = useState(false);
+  const [exportingTiffId, setExportingTiffId] = useState(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [lightboxImg, setLightboxImg] = useState(null);
@@ -338,6 +342,93 @@ export default function App() {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  };
+
+  // 核心渲染函数：施加用户选定的索尼创意外观 (FL2/FL3/IN/SH...)，以 16-bit 线性渲染并封装为无损 TIFF
+  const renderItemToTiff16 = async (item) => {
+    const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
+    const look = (defaultLook || item.info?.activeLook || 'FL2').toUpperCase();
+    const model = item.info?.cameraModel || item.exifResult?.overview?.model || 'ILCE-7C2';
+
+    let sourceImg = null;
+    let isRawSource = true;
+
+    try {
+      const decoder = new SonyRawDecoder();
+      const decoded = await decoder.decode(item.file, { halfSize: false });
+      decoder.dispose();
+      if (decoded && (decoded.rgb16Data || decoded.imageData)) {
+        if (decoded.rgb16Data) {
+          sourceImg = { rgb16Data: decoded.rgb16Data, width: decoded.width, height: decoded.height };
+        } else {
+          const canvas = document.createElement('canvas');
+          canvas.width = decoded.width;
+          canvas.height = decoded.height;
+          const ctx = canvas.getContext('2d');
+          ctx.putImageData(decoded.imageData, 0, 0);
+          sourceImg = canvas;
+        }
+        isRawSource = true;
+      }
+    } catch (err) {
+      console.warn('RAW 解码失败，尝试内嵌高清底片:', err);
+    }
+
+    if (!sourceImg && item.file) {
+      const fullResInfo = await extractPreviewWithInfo(item.file);
+      const bytes = fullResInfo?.hdBytes || fullResInfo?.bytes;
+      if (bytes) {
+        const orientedUrl = await createOrientedJpegUrl(bytes, 1);
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.src = orientedUrl;
+        await img.decode();
+        sourceImg = img;
+        isRawSource = false;
+      }
+    }
+
+    if (!sourceImg) {
+      throw new Error('未能加载可用的 RAW 像素源');
+    }
+
+    const params = {
+      look,
+      lutIntensity: 1.0,
+      exposure: 0.0,
+      contrast: 0.0,
+      highlights: 0.0,
+      shadows: 0.0,
+      wbOffset: parseInt(wbOffset, 10) || 0,
+      tint: 0.0,
+      saturation: 1.0,
+      isRaw: isRawSource,
+    };
+
+    const blob = await SonyColorRenderer.exportFullResolutionTiff16({
+      fullImg: sourceImg,
+      params,
+      basePath,
+      model,
+    });
+
+    return { blob, look };
+  };
+
+  // 导出单张 16-bit 无损母版 TIFF (完整施加选中的创意外观 3D-LUT 与胶片色彩曲线)
+  const handleExportSingleTiff = async (item) => {
+    if (!item.file || exportingTiffId) return;
+    setExportingTiffId(item.id);
+    try {
+      const { blob, look } = await renderItemToTiff16(item);
+      const baseName = item.name.replace(/\.[^/.]+$/, '');
+      downloadBlob(blob, `${baseName}_${look}_16bit.tiff`);
+    } catch (err) {
+      console.error('导出 16-bit TIFF 失败:', err);
+      alert('导出 16-bit TIFF 失败: ' + (err.message || '未知错误'));
+    } finally {
+      setExportingTiffId(null);
+    }
   };
 
   // 批量注入全部文件
@@ -800,6 +891,21 @@ export default function App() {
                           aria-label="提取高清 JPG"
                         >
                           <FileImage size={14} />
+                        </button>
+
+                        <button
+                          type="button"
+                          className="btn-tool-icon"
+                          onClick={() => handleExportSingleTiff(item)}
+                          disabled={Boolean(exportingTiffId)}
+                          title="导出 16-bit 无损母版 TIFF (保留 14-bit 满动态范围，48位 RGB · Adobe RGB 广色域，供 PS/LR/Capture One 专业后期精修)"
+                          aria-label="导出 16-bit TIFF"
+                        >
+                          {exportingTiffId === item.id ? (
+                            <RefreshCw size={13} className="spin" />
+                          ) : (
+                            <FileStack size={14} />
+                          )}
                         </button>
 
                         <button

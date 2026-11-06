@@ -607,6 +607,22 @@ input[type="range"]::-webkit-slider-thumb:hover {
   border-color: var(--border-strong);
 }
 
+.studio-btn-tiff {
+  background: var(--bg-panel);
+  border-color: rgba(8, 145, 178, 0.35);
+  color: var(--accent-teal);
+}
+
+.studio-btn-tiff:hover:not(:disabled) {
+  background: rgba(8, 145, 178, 0.08);
+  border-color: var(--accent-teal);
+}
+
+.studio-btn-tiff:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .studio-btn-export:disabled,
 .studio-btn-apply:disabled {
   opacity: 0.5;

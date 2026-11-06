@@ -16,11 +16,13 @@ import {
   Maximize2,
   CheckCircle2,
   Layers2,
-  Gauge
+  Gauge,
+  FileStack
 } from 'lucide-react';
 import { SONY_CREATIVE_LOOKS, SonyColorRenderer } from '../core/sonyColorEngine';
 import { extractFullResJpegFromArw, createOrientedJpegUrl } from '../core/previewExtractor';
 import { SonyRawDecoder } from '../core/rawDecoder';
+import { downloadBlob } from '../core/tiffExporter';
 import './LookStudioModal.css';
 
 export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
@@ -144,13 +146,17 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
         decoder.dispose();
         if (cancelled) return;
 
-        const canvas = document.createElement('canvas');
-        canvas.width = decoded.width;
-        canvas.height = decoded.height;
-        const ctx = canvas.getContext('2d');
-        ctx.putImageData(decoded.imageData, 0, 0);
+        if (decoded.rgb16Data && renderer.setImage16) {
+          renderer.setImage16(decoded.rgb16Data, decoded.width, decoded.height);
+        } else {
+          const canvas = document.createElement('canvas');
+          canvas.width = decoded.width;
+          canvas.height = decoded.height;
+          const ctx = canvas.getContext('2d');
+          ctx.putImageData(decoded.imageData, 0, 0);
+          renderer.setImage(canvas);
+        }
 
-        renderer.setImage(canvas);
         setIsRawMode(true);
         setIsDecodingRaw(false);
 
@@ -308,14 +314,18 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
           });
           decoder.dispose();
 
-          if (decoded && decoded.imageData) {
+          if (decoded && (decoded.rgb16Data || decoded.imageData)) {
             setExportProgress(`正在渲染 ${decoded.width}×${decoded.height} 原片...`);
-            const canvas = document.createElement('canvas');
-            canvas.width = decoded.width;
-            canvas.height = decoded.height;
-            const ctx = canvas.getContext('2d');
-            ctx.putImageData(decoded.imageData, 0, 0);
-            sourceImg = canvas;
+            if (decoded.rgb16Data) {
+              sourceImg = { rgb16Data: decoded.rgb16Data, width: decoded.width, height: decoded.height };
+            } else {
+              const canvas = document.createElement('canvas');
+              canvas.width = decoded.width;
+              canvas.height = decoded.height;
+              const ctx = canvas.getContext('2d');
+              ctx.putImageData(decoded.imageData, 0, 0);
+              sourceImg = canvas;
+            }
             isRawSource = true;
           }
         } catch (rawErr) {
@@ -385,6 +395,101 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
     } catch (err) {
       console.error('导出失败:', err);
       alert('导出照片失败: ' + err.message);
+      setIsExporting(false);
+      setExportProgress('');
+    }
+  };
+
+  // 导出 16-bit 线性无损 TIFF (完整施加创意外观 3D-LUT、色调曲线与调色参数)
+  const handleExport16BitTiff = async () => {
+    if (isExporting) return;
+    setIsExporting(true);
+    setExportProgress('正在执行 14-bit RAW 全像素解码并渲染创意外观...');
+
+    try {
+      const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
+      let sourceImg = null;
+      let isRawSource = true;
+
+      if (photoItem?.file) {
+        try {
+          const decoder = new SonyRawDecoder();
+          const decoded = await decoder.decode(photoItem.file, {
+            halfSize: false,
+          });
+          decoder.dispose();
+
+          if (decoded && (decoded.rgb16Data || decoded.imageData)) {
+            setExportProgress(`正在渲染 ${decoded.width}×${decoded.height} 16-bit ${selectedLook} TIFF...`);
+            if (decoded.rgb16Data) {
+              sourceImg = { rgb16Data: decoded.rgb16Data, width: decoded.width, height: decoded.height };
+            } else {
+              const canvas = document.createElement('canvas');
+              canvas.width = decoded.width;
+              canvas.height = decoded.height;
+              const ctx = canvas.getContext('2d');
+              ctx.putImageData(decoded.imageData, 0, 0);
+              sourceImg = canvas;
+            }
+            isRawSource = true;
+          }
+        } catch (rawErr) {
+          console.warn('全像素 RAW 解码失败，尝试内嵌高清底片:', rawErr);
+        }
+      }
+
+      if (!sourceImg && photoItem?.file) {
+        const fullResInfo = await extractFullResJpegFromArw(photoItem.file);
+        if (fullResInfo && fullResInfo.bytes) {
+          const orientedUrl = await createOrientedJpegUrl(
+            fullResInfo.bytes,
+            fullResInfo.orientationInfo?.exifOrientation || 1
+          );
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.src = orientedUrl;
+          await img.decode();
+          sourceImg = img;
+          isRawSource = false;
+        }
+      }
+
+      if (!sourceImg) {
+        throw new Error('未能加载可用的 RAW 像素源进行导出');
+      }
+
+      const params = {
+        look: selectedLook,
+        lutIntensity,
+        exposure,
+        contrast,
+        highlights,
+        shadows,
+        wbOffset,
+        tint,
+        saturation,
+        isRaw: isRawSource,
+      };
+
+      const model = photoItem.info?.cameraModel || photoItem.exifResult?.overview?.model || 'ILCE-7C2';
+      const tiffBlob = await SonyColorRenderer.exportFullResolutionTiff16({
+        fullImg: sourceImg,
+        params,
+        basePath,
+        model,
+      });
+
+      const baseName = photoItem.name.replace(/\.[^/.]+$/, '');
+      downloadBlob(tiffBlob, `${baseName}_${selectedLook}_16bit.tiff`);
+
+      setExportProgress('16-bit TIFF 导出完成');
+      setTimeout(() => {
+        setIsExporting(false);
+        setExportProgress('');
+      }, 1500);
+    } catch (err) {
+      console.error('导出 16-bit TIFF 失败:', err);
+      alert('导出 16-bit TIFF 失败: ' + (err.message || '未知错误'));
       setIsExporting(false);
       setExportProgress('');
     }
@@ -821,6 +926,23 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
                     </div>
                   </>
                 )}
+              </button>
+
+              <button
+                className="studio-btn studio-btn-tiff"
+                onClick={handleExport16BitTiff}
+                disabled={isExporting}
+                title="导出 16-bit 线性无损 TIFF (保留 14-bit RAW 全部动态范围，48位 RGB · Adobe RGB 广色域，供 Photoshop / Lightroom / Capture One 精修)"
+              >
+                <FileStack size={16} />
+                <div className="btn-text-col">
+                  <span className="btn-main-text">
+                    导出 16-bit 无损 TIFF
+                  </span>
+                  <span className="btn-sub-text">
+                    48-bit RGB · Adobe RGB 宽容度母版
+                  </span>
+                </div>
               </button>
 
               <button
