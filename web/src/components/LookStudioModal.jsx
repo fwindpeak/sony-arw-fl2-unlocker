@@ -17,7 +17,10 @@ import {
   CheckCircle2,
   Layers2,
   Gauge,
-  FileStack
+  FileStack,
+  Share2,
+  Sparkles,
+  Info
 } from 'lucide-react';
 import { SONY_CREATIVE_LOOKS, SonyColorRenderer } from '../core/sonyColorEngine';
 import { extractFullResJpegFromArw, createOrientedJpegUrl } from '../core/previewExtractor';
@@ -25,10 +28,91 @@ import { SonyRawDecoder } from '../core/rawDecoder';
 import { downloadBlob } from '../core/tiffExporter';
 import './LookStudioModal.css';
 
+// 专业微调滑块组件 (支持点击标签复位、数值复位、左右步进微调按钮)
+function SliderRow({
+  icon: Icon,
+  label,
+  value,
+  displayValue,
+  min,
+  max,
+  step,
+  defaultValue = 0,
+  onChange,
+  onReset
+}) {
+  const handleDec = (e) => {
+    e.stopPropagation();
+    const next = Math.max(min, Number((value - step).toFixed(2)));
+    onChange(next);
+  };
+  const handleInc = (e) => {
+    e.stopPropagation();
+    const next = Math.min(max, Number((value + step).toFixed(2)));
+    onChange(next);
+  };
+  const handleReset = (e) => {
+    e.stopPropagation();
+    if (onReset) onReset();
+    else onChange(defaultValue);
+  };
+
+  return (
+    <div className="slider-item">
+      <div className="slider-label-row">
+        <span
+          className="flex-row clickable-label"
+          onClick={handleReset}
+          title="点击重置为默认值"
+        >
+          {Icon && <Icon size={13} />}
+          <span>{label}</span>
+        </span>
+        <span
+          className="slider-val clickable-val"
+          onClick={handleReset}
+          title="点击重置为默认值"
+        >
+          {displayValue}
+        </span>
+      </div>
+      <div className="slider-track-wrap">
+        <button
+          type="button"
+          className="btn-stepper btn-dec"
+          onClick={handleDec}
+          aria-label="减少"
+        >
+          −
+        </button>
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          onChange={(e) => onChange(parseFloat(e.target.value))}
+        />
+        <button
+          type="button"
+          className="btn-stepper btn-inc"
+          onClick={handleInc}
+          aria-label="增加"
+        >
+          +
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const rendererRef = useRef(null);
+
+  // 移动端 Lightroom 模式底部当前激活的一级 Tab ('looks' | 'light' | 'color' | 'export')
+  const [mobileTab, setMobileTab] = useState('looks');
 
   // 调色参数状态
   const [selectedLook, setSelectedLook] = useState('FL2');
@@ -178,18 +262,16 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
       if (renderer) {
         if (typeof renderer.destroy === 'function') {
           renderer.destroy();
-        } else if (typeof renderer.dispose === 'function') {
-          renderer.dispose();
         }
       }
-      rendererRef.current = null;
     };
   }, [photoItem]);
 
-  // 当调色参数变化时触发重绘
+  // 当调色参数改变时更新画面
   useEffect(() => {
     triggerRender();
   }, [
+    selectedLook,
     lutIntensity,
     exposure,
     contrast,
@@ -204,58 +286,55 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
     triggerRender,
   ]);
 
-  // 切换创意外观
+  // 切换外观预设
   const handleSelectLook = async (lookKey) => {
-    if (selectedLook === lookKey || !rendererRef.current) return;
     setSelectedLook(lookKey);
-    setIsLoadingLut(true);
+    if (!rendererRef.current) return;
 
+    const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
+    setIsLoadingLut(true);
     try {
-      const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
       await rendererRef.current.loadLut(lookKey, basePath);
-    } catch (e) {
-      console.warn('LUT 加载提示:', e);
     } finally {
       setIsLoadingLut(false);
       triggerRender({ look: lookKey });
     }
   };
 
-  // 分屏滑块拖拽逻辑 (支持触控和鼠标)
-  const updateSplitRatioFromClientX = (clientX) => {
-    const targetEl = canvasRef.current || containerRef.current;
-    if (!targetEl) return;
-    const rect = targetEl.getBoundingClientRect();
-    if (rect.width <= 0) return;
-    const x = clientX - rect.left;
-    const ratio = Math.max(0.01, Math.min(0.99, x / rect.width));
-    setSplitRatio(ratio);
-  };
-
+  // 分屏拖拽交互
   const handlePointerDown = (e) => {
-    // 忽略控制条与所有交互按钮
-    if (e.target.closest('.viewport-controls') || e.target.closest('button')) {
-      return;
+    if (splitMode !== 1 || !containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const clientX = e.clientX || (e.touches && e.touches[0]?.clientX);
+    if (clientX === undefined) return;
+    const ratio = Math.max(0.05, Math.min(0.95, (clientX - rect.left) / rect.width));
+
+    if (Math.abs(ratio - splitRatio) < 0.12) {
+      setIsDraggingSplit(true);
+      containerRef.current.setPointerCapture?.(e.pointerId);
     }
-    if (splitMode !== 1) return;
-    setIsDraggingSplit(true);
-    e.currentTarget.setPointerCapture?.(e.pointerId);
-    updateSplitRatioFromClientX(e.clientX);
   };
 
   const handlePointerMove = (e) => {
-    if (!isDraggingSplit || splitMode !== 1) return;
-    updateSplitRatioFromClientX(e.clientX);
+    if (!isDraggingSplit || !containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const clientX = e.clientX || (e.touches && e.touches[0]?.clientX);
+    if (clientX === undefined) return;
+    const ratio = Math.max(0.05, Math.min(0.95, (clientX - rect.left) / rect.width));
+    setSplitRatio(ratio);
+    triggerRender({ splitRatio: ratio });
   };
 
   const handlePointerUp = (e) => {
-    setIsDraggingSplit(false);
-    try {
-      e.currentTarget.releasePointerCapture?.(e.pointerId);
-    } catch {}
+    if (isDraggingSplit && containerRef.current) {
+      setIsDraggingSplit(false);
+      try {
+        containerRef.current.releasePointerCapture?.(e.pointerId);
+      } catch {}
+    }
   };
 
-  // 重置调色参数
+  // 重置调色参数为默认值
   const handleResetParams = () => {
     setExposure(0.0);
     setContrast(0.0);
@@ -302,7 +381,6 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
     try {
       const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
       let sourceImg = null;
-
       let isRawSource = true;
 
       if (photoItem?.file) {
@@ -378,23 +456,20 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
       const downloadUrl = URL.createObjectURL(resultBlob);
       const a = document.createElement('a');
       a.href = downloadUrl;
-      const w = sourceImg.naturalWidth || sourceImg.width;
-      const h = sourceImg.naturalHeight || sourceImg.height;
-      const resSuffix = w ? `${w}x${h}` : 'FullRes';
-      a.download = `${baseName}_${selectedLook}_${resSuffix}.jpg`;
+      a.download = `${baseName}_${selectedLook}_preview.jpg`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(downloadUrl);
 
-      setExportProgress('导出完成');
+      setExportProgress('JPEG 照片已成功导出');
       setTimeout(() => {
         setIsExporting(false);
         setExportProgress('');
       }, 1500);
     } catch (err) {
-      console.error('导出失败:', err);
-      alert('导出照片失败: ' + err.message);
+      console.error('全尺寸导出失败:', err);
+      alert('导出照片失败: ' + (err.message || '未知错误'));
       setIsExporting(false);
       setExportProgress('');
     }
@@ -505,46 +580,347 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
 
   const currentLookInfo = SONY_CREATIVE_LOOKS[selectedLook] || SONY_CREATIVE_LOOKS.ST;
 
+  // --------------------------------------------------------------------------
+  // 子面板内容渲染：创意外观面板 (Looks)
+  // --------------------------------------------------------------------------
+  const renderLooksPanel = (isMobile = false) => (
+    <div className="panel-section looks-panel-section">
+      <div className="section-head">
+        <div className="section-title">
+          <Palette size={15} />
+          <span>创意外观 (Creative Look)</span>
+        </div>
+        {isLoadingLut && <span className="loading-tag">加载 3D-LUT...</span>}
+      </div>
+
+      {/* 外观强度滑块 */}
+      <SliderRow
+        icon={Layers}
+        label="外观强度 (Amount)"
+        value={lutIntensity}
+        displayValue={`${Math.round(lutIntensity * 100)}%`}
+        min={0}
+        max={1}
+        step={0.02}
+        defaultValue={1.0}
+        onChange={setLutIntensity}
+      />
+
+      {/* 创意外观网格 / 横向滚动条 */}
+      <div className={isMobile ? "mobile-looks-track" : "looks-grid"}>
+        {Object.values(SONY_CREATIVE_LOOKS).map((look) => {
+          const isSelected = selectedLook === look.key;
+          return (
+            <button
+              key={look.key}
+              className={`look-tile ${isSelected ? 'active' : ''}`}
+              onClick={() => handleSelectLook(look.key)}
+            >
+              <div className="tile-top">
+                <span className="tile-key">{look.key}</span>
+                <span className="tile-badge">{look.badge.replace(/[⚡✨]/g, '') || look.key}</span>
+              </div>
+              <div className="tile-name">{look.title}</div>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* 当前外观说明卡片 */}
+      <div className="look-desc-card">
+        <div className="card-desc-title">
+          <strong>{currentLookInfo.name}</strong> — {currentLookInfo.title}
+        </div>
+        <div className="card-desc-text">{currentLookInfo.desc}</div>
+      </div>
+    </div>
+  );
+
+  // --------------------------------------------------------------------------
+  // 子面板内容渲染：光效影调面板 (Light)
+  // --------------------------------------------------------------------------
+  const renderLightPanel = () => (
+    <div className="panel-section light-panel-section">
+      <div className="section-head">
+        <div className="section-title">
+          <Sun size={15} />
+          <span>光效影调 (Light & Tone)</span>
+        </div>
+        <button
+          className="btn-reset-mini"
+          onClick={() => {
+            setExposure(0);
+            setContrast(0);
+            setHighlights(0);
+            setShadows(0);
+          }}
+          title="重置光效参数"
+        >
+          <RotateCcw size={11} />
+          重置光效
+        </button>
+      </div>
+
+      <SliderRow
+        icon={Sun}
+        label="曝光补偿 (Exposure)"
+        value={exposure}
+        displayValue={exposure > 0 ? `+${exposure.toFixed(2)} EV` : `${exposure.toFixed(2)} EV`}
+        min={-2.5}
+        max={2.5}
+        step={0.05}
+        defaultValue={0.0}
+        onChange={setExposure}
+      />
+
+      <SliderRow
+        icon={Contrast}
+        label="对比度 (Contrast)"
+        value={contrast}
+        displayValue={contrast > 0 ? `+${contrast}` : `${contrast}`}
+        min={-30}
+        max={30}
+        step={1}
+        defaultValue={0}
+        onChange={setContrast}
+      />
+
+      <SliderRow
+        label="高光压制 / 提亮 (Highlights)"
+        value={highlights}
+        displayValue={highlights > 0 ? `+${highlights}` : `${highlights}`}
+        min={-30}
+        max={30}
+        step={1}
+        defaultValue={0}
+        onChange={setHighlights}
+      />
+
+      <SliderRow
+        label="阴影提升 / 压暗 (Shadows)"
+        value={shadows}
+        displayValue={shadows > 0 ? `+${shadows}` : `${shadows}`}
+        min={-30}
+        max={30}
+        step={1}
+        defaultValue={0}
+        onChange={setShadows}
+      />
+    </div>
+  );
+
+  // --------------------------------------------------------------------------
+  // 子面板内容渲染：色彩白平衡面板 (Color)
+  // --------------------------------------------------------------------------
+  const renderColorPanel = () => (
+    <div className="panel-section color-panel-section">
+      <div className="section-head">
+        <div className="section-title">
+          <Thermometer size={15} />
+          <span>色彩与白平衡 (Color & WB)</span>
+        </div>
+        <button
+          className="btn-reset-mini"
+          onClick={() => {
+            setWbOffset(0);
+            setSaturation(1.0);
+          }}
+          title="重置色彩参数"
+        >
+          <RotateCcw size={11} />
+          重置色彩
+        </button>
+      </div>
+
+      {/* 色温微调 */}
+      <SliderRow
+        icon={Thermometer}
+        label="色温偏移 (WB Offset)"
+        value={wbOffset}
+        displayValue={wbOffset > 0 ? `+${wbOffset}K` : `${wbOffset}K`}
+        min={-1500}
+        max={1500}
+        step={50}
+        defaultValue={0}
+        onChange={setWbOffset}
+      />
+
+      <div className="wb-quick-pills">
+        <button
+          className={`wb-pill ${wbOffset === 0 ? 'active' : ''}`}
+          onClick={() => setWbOffset(0)}
+        >
+          0K (原片基准)
+        </button>
+        <button
+          className={`wb-pill ${wbOffset === 300 ? 'active' : ''}`}
+          onClick={() => setWbOffset(300)}
+        >
+          +300K (微暖)
+        </button>
+        <button
+          className={`wb-pill ${wbOffset === 600 ? 'active' : ''}`}
+          onClick={() => setWbOffset(600)}
+        >
+          +600K (浓暖)
+        </button>
+        <button
+          className={`wb-pill ${wbOffset === -300 ? 'active' : ''}`}
+          onClick={() => setWbOffset(-300)}
+        >
+          -300K (清冷)
+        </button>
+      </div>
+
+      {/* 饱和度 */}
+      <SliderRow
+        label="自然饱和度 (Saturation)"
+        value={saturation}
+        displayValue={`${Math.round(saturation * 100)}%`}
+        min={0.0}
+        max={2.0}
+        step={0.05}
+        defaultValue={1.0}
+        onChange={setSaturation}
+      />
+    </div>
+  );
+
+  // --------------------------------------------------------------------------
+  // 子面板内容渲染：导出分享面板 (Export)
+  // --------------------------------------------------------------------------
+  const renderExportPanel = () => (
+    <div className="panel-section export-panel-section">
+      <div className="section-head">
+        <div className="section-title">
+          <Download size={15} />
+          <span>导出与母版保存</span>
+        </div>
+      </div>
+
+      <div className="studio-actions-footer">
+        {/* 1. 核心：将外观写入 ARW */}
+        <button
+          className="studio-btn studio-btn-apply"
+          onClick={handleApplyToArw}
+          disabled={isExporting}
+          title="将当前外观预设直接写入 ARW 文件"
+        >
+          <CheckCircle2 size={18} />
+          <div className="btn-text-col">
+            <span className="btn-main-text">将此外观写入并导出 ARW</span>
+            <span className="btn-sub-text">索尼原厂无损标准 · 支持官方 Imaging Edge 自由调整</span>
+          </div>
+        </button>
+
+        {/* 2. 导出 16-bit TIFF */}
+        <button
+          className="studio-btn studio-btn-tiff"
+          onClick={handleExport16BitTiff}
+          disabled={isExporting}
+          title="导出 16-bit 线性无损 TIFF (保留 14-bit RAW 全部动态范围，48位 RGB · Adobe RGB 广色域，供 Photoshop / Lightroom / Capture One 精修)"
+        >
+          <FileStack size={18} />
+          <div className="btn-text-col">
+            <span className="btn-main-text">导出 16-bit 无损母版 TIFF</span>
+            <span className="btn-sub-text">48-bit RGB · Adobe RGB 宽容度母版，保留 14-bit 满动态</span>
+          </div>
+        </button>
+
+        {/* 3. 导出高质量渲染 JPEG */}
+        <button
+          className="studio-btn studio-btn-export"
+          onClick={() => handleExportJpeg()}
+          disabled={isExporting}
+          title="导出高分辨率渲染 JPEG 文件"
+        >
+          {isExporting ? (
+            <>
+              <span className="spinner-mini" />
+              <span>{exportProgress || '正在渲染导出...'}</span>
+            </>
+          ) : (
+            <>
+              <Download size={18} />
+              <div className="btn-text-col">
+                <span className="btn-main-text">
+                  {fullResDims
+                    ? `导出全像素照片 (${fullResDims.width}×${fullResDims.height})`
+                    : '导出高质量照片 (JPG)'}
+                </span>
+                <span className="btn-sub-text">
+                  全画幅 3D-LUT 色彩渲染 · 即刻分享
+                </span>
+              </div>
+            </>
+          )}
+        </button>
+      </div>
+    </div>
+  );
+
   return (
     <div className="studio-overlay" onPointerUp={handlePointerUp}>
       <div className="studio-modal">
-        {/* 顶部工具栏 */}
+        {/* ===================================================================
+            顶部工具栏 (Top Bar) - 参照 Lightroom Mobile: 极简沉浸，触控大热区
+            =================================================================== */}
         <div className="studio-header">
+          {/* 左侧：返回 / 关闭 */}
+          <button
+            className="studio-btn-close"
+            onClick={onClose}
+            title="关闭调色暗房"
+            aria-label="关闭"
+          >
+            <X size={20} />
+          </button>
+
+          {/* 中间：居中元信息 (文件名 + 拍摄参数 + 快门亮点) */}
           <div className="studio-title-group">
-            <span className="studio-badge">RAW 外观调色暗房</span>
             <span className="studio-filename">{photoItem.name}</span>
-            {photoItem.orientationInfo && (
-              <span className="studio-orient-tag">
-                {photoItem.orientationInfo.label} {photoItem.orientationInfo.ratioTag}
-              </span>
-            )}
-            {photoItem.exifResult?.overview?.shutterCount !== undefined && (
-              <span
-                className="studio-shutter-tag"
-                title={`Sony 硬件物理快门释放次数: ${photoItem.exifResult.overview.shutterCount.toLocaleString()} 次`}
-              >
-                <Gauge size={11} />
-                <span>快门 {photoItem.exifResult.overview.shutterCount.toLocaleString()}</span>
-              </span>
-            )}
-            {photoItem.exifResult?.overview && (photoItem.exifResult.overview.fNumber || photoItem.exifResult.overview.exposureTimeString || photoItem.exifResult.overview.iso) && (
-              <span
-                className="studio-orient-tag"
-                style={{ opacity: 0.85 }}
-                title="曝光参数"
-              >
-                {[
-                  photoItem.exifResult.overview.fNumber ? `f/${photoItem.exifResult.overview.fNumber}` : null,
-                  photoItem.exifResult.overview.exposureTimeString,
-                  photoItem.exifResult.overview.iso ? `ISO ${photoItem.exifResult.overview.iso}` : null,
-                ].filter(Boolean).join(' · ')}
-              </span>
-            )}
+            <div className="studio-meta-sub">
+              {photoItem?.file && (
+                <span className="studio-badge-mini">14-bit RAW</span>
+              )}
+              {photoItem.exifResult?.overview?.shutterCount !== undefined && (
+                <span
+                  className="studio-shutter-tag"
+                  title={`Sony 硬件物理快门释放次数: ${photoItem.exifResult.overview.shutterCount.toLocaleString()} 次`}
+                >
+                  <Gauge size={10} />
+                  <span>快门 {photoItem.exifResult.overview.shutterCount.toLocaleString()}</span>
+                </span>
+              )}
+              {photoItem.exifResult?.overview && (
+                <span className="studio-exposure-tag">
+                  {[
+                    photoItem.exifResult.overview.fNumber ? `f/${photoItem.exifResult.overview.fNumber}` : null,
+                    photoItem.exifResult.overview.exposureTimeString,
+                    photoItem.exifResult.overview.iso ? `ISO ${photoItem.exifResult.overview.iso}` : null,
+                  ].filter(Boolean).join(' · ')}
+                </span>
+              )}
+            </div>
           </div>
 
+          {/* 右侧：操作区 (原图对比、复位、分屏切换) */}
           <div className="studio-top-actions">
-            {/* 分屏模式按钮 */}
-            <div className="view-mode-toggle">
+            {/* Lightroom 经典：按住对比原图 */}
+            <button
+              className={`view-btn hold-btn ${isHoldingOriginal ? 'holding' : ''}`}
+              onMouseDown={() => setIsHoldingOriginal(true)}
+              onMouseUp={() => setIsHoldingOriginal(false)}
+              onTouchStart={() => setIsHoldingOriginal(true)}
+              onTouchEnd={() => setIsHoldingOriginal(false)}
+              title="按住查看拍摄原图"
+            >
+              <Eye size={15} />
+              <span className="hide-on-mobile-text">原图对比</span>
+            </button>
+
+            {/* 分屏模式切换 (在桌面端及宽屏时展示) */}
+            <div className="view-mode-toggle desktop-only-flex">
               <button
                 className={`view-btn ${splitMode === 0 ? 'active' : ''}`}
                 onClick={() => setSplitMode(0)}
@@ -555,53 +931,28 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
               <button
                 className={`view-btn ${splitMode === 1 ? 'active' : ''}`}
                 onClick={() => setSplitMode(1)}
-                title="分屏对比 (拖拽中线)"
+                title="左右分屏"
               >
                 <Columns size={13} />
                 分屏
               </button>
-              <button
-                className="view-btn hold-btn"
-                onMouseDown={() => setIsHoldingOriginal(true)}
-                onMouseUp={() => setIsHoldingOriginal(false)}
-                onTouchStart={() => setIsHoldingOriginal(true)}
-                onTouchEnd={() => setIsHoldingOriginal(false)}
-                title="按住查看拍摄原图"
-              >
-                <Eye size={13} />
-                原图
-              </button>
             </div>
 
-            {/* 14-bit RAW 状态指示 */}
-            {photoItem?.file && (
-              <button
-                className={`view-btn raw-mode-btn ${isRawMode ? 'active-raw' : ''}`}
-                onClick={handleReloadRaw}
-                disabled={isDecodingRaw}
-                title={isRawMode ? "14-bit 真实拜耳 RAW 像素渲染管线 (点击可重载)" : "正在解码 RAW 拜耳数据"}
-              >
-                {isDecodingRaw ? (
-                  <>
-                    <span className="spinner-mini" />
-                    <span>RAW 解码中...</span>
-                  </>
-                ) : (
-                  <>
-                    <Layers2 size={13} />
-                    <span>{isRawMode ? '14-bit RAW 已就绪' : 'RAW 拜耳解码'}</span>
-                  </>
-                )}
-              </button>
-            )}
-
-            <button className="studio-btn-close" onClick={onClose} title="关闭暗房" aria-label="关闭">
-              <X size={18} />
+            {/* 一键复位所有调色参数 */}
+            <button
+              className="view-btn btn-reset-top"
+              onClick={handleResetParams}
+              title="重置所有调色参数"
+            >
+              <RotateCcw size={15} />
+              <span className="hide-on-mobile-text">重置</span>
             </button>
           </div>
         </div>
 
-        {/* 主体视窗区域 */}
+        {/* ===================================================================
+            主体工作区 (Main Darkroom Viewport)
+            =================================================================== */}
         <div className="studio-main">
           {/* 左侧/中央画布视口 */}
           <div
@@ -639,6 +990,14 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
                   <div className="label-box label-right">
                     {currentLookInfo.name} · 色彩校准
                   </div>
+                </div>
+              )}
+
+              {/* 按住对比时的全屏原图浮水提示 */}
+              {isHoldingOriginal && (
+                <div className="holding-original-badge">
+                  <Eye size={14} />
+                  <span>拍摄原图 (Before)</span>
                 </div>
               )}
             </div>
@@ -679,283 +1038,75 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
             </div>
           </div>
 
-          {/* 右侧参数控制面板 */}
-          <div className="studio-sidebar">
-            {/* 创意外观网格 */}
-            <div className="panel-section">
-              <div className="section-head">
-                <div className="section-title">
-                  <Palette size={15} />
-                  <span>创意外观 (Creative Look)</span>
-                </div>
-                {isLoadingLut && <span className="loading-tag">加载 3D-LUT...</span>}
-              </div>
-
-              <div className="looks-grid">
-                {Object.values(SONY_CREATIVE_LOOKS).map((look) => {
-                  const isSelected = selectedLook === look.key;
-                  return (
-                    <button
-                      key={look.key}
-                      className={`look-tile ${isSelected ? 'active' : ''}`}
-                      onClick={() => handleSelectLook(look.key)}
-                    >
-                      <div className="tile-top">
-                        <span className="tile-key">{look.key}</span>
-                        <span className="tile-badge">{look.badge.replace(/[⚡✨]/g, '') || look.key}</span>
-                      </div>
-                      <div className="tile-name">{look.title}</div>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* 当前外观说明卡片 */}
-              <div className="look-desc-card">
-                <div className="card-desc-title">
-                  <strong>{currentLookInfo.name}</strong> — {currentLookInfo.title}
-                </div>
-                <div className="card-desc-text">{currentLookInfo.desc}</div>
-              </div>
-            </div>
-
-            {/* 胶片浓度与色温校正 */}
-            <div className="panel-section">
-              <div className="section-head">
-                <div className="section-title">
-                  <Layers size={15} />
-                  <span>3D-LUT 强度与色温微调</span>
-                </div>
-                <button
-                  className="btn-reset-mini"
-                  onClick={handleResetParams}
-                  title="重置所有参数"
-                >
-                  <RotateCcw size={11} />
-                  重置
-                </button>
-              </div>
-
-              {/* 3D-LUT 浓度 */}
-              <div className="slider-item">
-                <div className="slider-label-row">
-                  <span>3D-LUT 强度</span>
-                  <span className="slider-val">{Math.round(lutIntensity * 100)}%</span>
-                </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  value={lutIntensity}
-                  onChange={(e) => setLutIntensity(parseFloat(e.target.value))}
-                />
-              </div>
-
-              {/* 色温微调 */}
-              <div className="slider-item">
-                <div className="slider-label-row">
-                  <span className="flex-row">
-                    <Thermometer size={13} />
-                    色温偏移 (WB Offset)
-                  </span>
-                  <span className="slider-val">
-                    {wbOffset > 0 ? `+${wbOffset}K` : `${wbOffset}K`}
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min="-1500"
-                  max="1500"
-                  step="50"
-                  value={wbOffset}
-                  onChange={(e) => setWbOffset(parseFloat(e.target.value))}
-                />
-                <div className="wb-quick-pills">
-                  <button
-                    className={`wb-pill ${wbOffset === 0 ? 'active' : ''}`}
-                    onClick={() => setWbOffset(0)}
-                  >
-                    0K (原片基准)
-                  </button>
-                  <button
-                    className={`wb-pill ${wbOffset === 300 ? 'active' : ''}`}
-                    onClick={() => setWbOffset(300)}
-                  >
-                    +300K (自然微暖)
-                  </button>
-                  <button
-                    className={`wb-pill ${wbOffset === 600 ? 'active' : ''}`}
-                    onClick={() => setWbOffset(600)}
-                  >
-                    +600K (浓郁暖调)
-                  </button>
-                  <button
-                    className={`wb-pill ${wbOffset === -300 ? 'active' : ''}`}
-                    onClick={() => setWbOffset(-300)}
-                  >
-                    -300K (清冷微冷)
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* 基础影调调节 */}
-            <div className="panel-section">
-              <div className="section-head">
-                <div className="section-title">
-                  <Sliders size={15} />
-                  <span>影调与色彩微调 (Tone & Color)</span>
-                </div>
-              </div>
-
-              {/* 曝光 */}
-              <div className="slider-item">
-                <div className="slider-label-row">
-                  <span className="flex-row">
-                    <Sun size={13} />
-                    曝光补偿 (Exposure)
-                  </span>
-                  <span className="slider-val">
-                    {exposure > 0 ? `+${exposure.toFixed(2)}` : exposure.toFixed(2)} EV
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min="-2.5"
-                  max="2.5"
-                  step="0.05"
-                  value={exposure}
-                  onChange={(e) => setExposure(parseFloat(e.target.value))}
-                />
-              </div>
-
-              {/* 对比度 */}
-              <div className="slider-item">
-                <div className="slider-label-row">
-                  <span className="flex-row">
-                    <Contrast size={13} />
-                    对比度 (Contrast)
-                  </span>
-                  <span className="slider-val">{contrast > 0 ? `+${contrast}` : contrast}</span>
-                </div>
-                <input
-                  type="range"
-                  min="-30"
-                  max="30"
-                  step="1"
-                  value={contrast}
-                  onChange={(e) => setContrast(parseFloat(e.target.value))}
-                />
-              </div>
-
-              {/* 高光 */}
-              <div className="slider-item">
-                <div className="slider-label-row">
-                  <span>高光压制 / 提亮</span>
-                  <span className="slider-val">{highlights > 0 ? `+${highlights}` : highlights}</span>
-                </div>
-                <input
-                  type="range"
-                  min="-30"
-                  max="30"
-                  step="1"
-                  value={highlights}
-                  onChange={(e) => setHighlights(parseFloat(e.target.value))}
-                />
-              </div>
-
-              {/* 阴影 */}
-              <div className="slider-item">
-                <div className="slider-label-row">
-                  <span>阴影提升 / 压暗</span>
-                  <span className="slider-val">{shadows > 0 ? `+${shadows}` : shadows}</span>
-                </div>
-                <input
-                  type="range"
-                  min="-30"
-                  max="30"
-                  step="1"
-                  value={shadows}
-                  onChange={(e) => setShadows(parseFloat(e.target.value))}
-                />
-              </div>
-
-              {/* 饱和度 */}
-              <div className="slider-item">
-                <div className="slider-label-row">
-                  <span>饱和度 (Saturation)</span>
-                  <span className="slider-val">{Math.round(saturation * 100)}%</span>
-                </div>
-                <input
-                  type="range"
-                  min="0.0"
-                  max="2.0"
-                  step="0.05"
-                  value={saturation}
-                  onChange={(e) => setSaturation(parseFloat(e.target.value))}
-                />
-              </div>
-            </div>
-
-            {/* 底部导出与注入操作 */}
-            <div className="studio-actions-footer">
-              <button
-                className="studio-btn studio-btn-export"
-                onClick={() => handleExportJpeg('full')}
-                disabled={isExporting}
-                title="导出高分辨率渲染 JPEG 文件"
-              >
-                {isExporting ? (
-                  <>
-                    <span className="spinner-mini" />
-                    <span>{exportProgress || '正在渲染导出...'}</span>
-                  </>
-                ) : (
-                  <>
-                    <Download size={16} />
-                    <div className="btn-text-col">
-                      <span className="btn-main-text">
-                        {fullResDims
-                          ? `导出高分辨率照片 (${fullResDims.width}×${fullResDims.height})`
-                          : '导出高分辨率渲染图 (JPG)'}
-                      </span>
-                      <span className="btn-sub-text">
-                        全画幅色彩渲染 · 3D-LUT 矩阵
-                      </span>
-                    </div>
-                  </>
-                )}
-              </button>
-
-              <button
-                className="studio-btn studio-btn-tiff"
-                onClick={handleExport16BitTiff}
-                disabled={isExporting}
-                title="导出 16-bit 线性无损 TIFF (保留 14-bit RAW 全部动态范围，48位 RGB · Adobe RGB 广色域，供 Photoshop / Lightroom / Capture One 精修)"
-              >
-                <FileStack size={16} />
-                <div className="btn-text-col">
-                  <span className="btn-main-text">
-                    导出 16-bit 无损 TIFF
-                  </span>
-                  <span className="btn-sub-text">
-                    48-bit RGB · Adobe RGB 宽容度母版
-                  </span>
-                </div>
-              </button>
-
-              <button
-                className="studio-btn studio-btn-apply"
-                onClick={handleApplyToArw}
-                disabled={isExporting}
-                title="将当前外观预设直接写入 ARW 文件"
-              >
-                <CheckCircle2 size={16} />
-                <span>将此外观写入并导出 ARW</span>
-              </button>
-            </div>
+          {/* =================================================================
+              桌面端侧边栏 (Desktop Sidebar) - 宽屏下展示
+              ================================================================= */}
+          <div className="studio-sidebar desktop-sidebar">
+            {renderLooksPanel(false)}
+            {renderLightPanel()}
+            {renderColorPanel()}
+            {renderExportPanel()}
           </div>
+        </div>
+
+        {/* ===================================================================
+            移动端专属：Lightroom Mobile 底部抽屉与一级导航系统
+            =================================================================== */}
+        <div className="mobile-darkroom-footer">
+          {/* 上层：当前选中的二级工具抽屉 (Tool Drawer) */}
+          <div className="mobile-tool-drawer">
+            {mobileTab === 'looks' && renderLooksPanel(true)}
+            {mobileTab === 'light' && renderLightPanel()}
+            {mobileTab === 'color' && renderColorPanel()}
+            {mobileTab === 'export' && renderExportPanel()}
+          </div>
+
+          {/* 最底层：Lightroom 标志性一级分类工具栏 (Primary Category Bar) */}
+          <nav className="mobile-primary-tabbar">
+            <button
+              type="button"
+              className={`mobile-tab-item ${mobileTab === 'looks' ? 'active' : ''}`}
+              onClick={() => setMobileTab('looks')}
+            >
+              <div className="tab-icon-wrap">
+                <Palette size={20} />
+              </div>
+              <span className="tab-label">创意外观</span>
+            </button>
+
+            <button
+              type="button"
+              className={`mobile-tab-item ${mobileTab === 'light' ? 'active' : ''}`}
+              onClick={() => setMobileTab('light')}
+            >
+              <div className="tab-icon-wrap">
+                <Sun size={20} />
+              </div>
+              <span className="tab-label">光效影调</span>
+            </button>
+
+            <button
+              type="button"
+              className={`mobile-tab-item ${mobileTab === 'color' ? 'active' : ''}`}
+              onClick={() => setMobileTab('color')}
+            >
+              <div className="tab-icon-wrap">
+                <Thermometer size={20} />
+              </div>
+              <span className="tab-label">色彩校准</span>
+            </button>
+
+            <button
+              type="button"
+              className={`mobile-tab-item ${mobileTab === 'export' ? 'active' : ''}`}
+              onClick={() => setMobileTab('export')}
+            >
+              <div className="tab-icon-wrap">
+                <Download size={20} />
+              </div>
+              <span className="tab-label">导出保存</span>
+            </button>
+          </nav>
         </div>
       </div>
     </div>

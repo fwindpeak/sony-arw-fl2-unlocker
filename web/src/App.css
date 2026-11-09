@@ -1017,16 +1017,92 @@
   object-fit: contain;
 }
 
+/* 移动端专属控制与菜单 */
+.mobile-config-summary {
+  display: none;
+}
+
+.btn-card-mobile-studio {
+  display: none;
+}
+
+.card-mobile-more-wrap {
+  display: none;
+  position: relative;
+}
+
+.card-more-menu-dropdown {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+  padding: 6px;
+  min-width: 170px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  animation: popoverFadeIn 0.15s ease-out;
+}
+
+@keyframes popoverFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.card-more-menu-dropdown .menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.12s ease;
+}
+
+.card-more-menu-dropdown .menu-item:hover {
+  background: var(--bg-panel-hover);
+}
+
+.card-more-menu-dropdown .menu-item-danger {
+  color: var(--status-danger);
+}
+
+.card-more-menu-dropdown .menu-divider {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: 4px 0;
+}
+
 /* --------------------------------------------------------------------------
-   Mobile Browser Responsiveness (支持手机浏览器深度优化)
+   Mobile Browser Responsiveness (支持手机浏览器深度优化 - Lightroom Mobile 架构)
+   全面屏安全区适配 (Safe Area Insets: 灵动岛/刘海 + 底部操作条)
    -------------------------------------------------------------------------- */
 @media (max-width: 820px) {
   .tool-app {
-    padding: 0 12px 72px; /* 预留底部栏空间 */
+    padding-top: 0;
+    padding-left: max(12px, env(safe-area-inset-left, 0px));
+    padding-right: max(12px, env(safe-area-inset-right, 0px));
+    padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px)); /* 预留底部浮动栏与虚拟手势条空间 */
+    box-sizing: border-box;
   }
 
   .tool-navbar {
-    height: 52px;
+    height: calc(52px + env(safe-area-inset-top, 0px));
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-left: max(12px, env(safe-area-inset-left, 0px));
+    padding-right: max(12px, env(safe-area-inset-right, 0px));
+    box-sizing: border-box;
   }
 
   .brand-name {
@@ -1045,16 +1121,79 @@
     padding: 7px 9px;
   }
 
+  /* 移动端顶部可折叠全局配置条 */
   .control-strip {
-    padding: 10px;
-    margin-bottom: 14px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    border-radius: 10px;
+  }
+
+  .mobile-config-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .mobile-config-chips {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .mobile-config-chips::-webkit-scrollbar {
+    display: none;
+  }
+
+  .m-chip {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 6px;
+    white-space: nowrap;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-secondary);
+  }
+
+  .m-chip-look {
+    color: var(--sony-orange);
+    border-color: rgba(249, 115, 22, 0.3);
+    background: var(--sony-orange-subtle);
+  }
+
+  .btn-mobile-toggle-config {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 650;
+    color: var(--text-secondary);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    padding: 4px 8px;
+    border-radius: 6px;
+    flex-shrink: 0;
+    cursor: pointer;
   }
 
   .config-selectors {
+    display: none; /* 默认折叠，极度节省垂向空间 */
     width: 100%;
-    display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 8px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .config-selectors.mobile-expanded {
+    display: grid;
+    animation: popoverFadeIn 0.2s ease-out;
   }
 
   .select-pill {
@@ -1080,10 +1219,6 @@
 
   .desktop-actions {
     display: none; /* 移动端使用吸底操作栏 */
-  }
-
-  .mobile-bottom-bar {
-    display: flex;
   }
 
   .upload-btn-mobile {
@@ -1116,7 +1251,7 @@
   }
 
   .photo-grid {
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(165px, 1fr));
     gap: 10px;
     align-items: start;
   }
@@ -1130,28 +1265,141 @@
     font-size: 12px;
   }
 
-  .card-actions {
-    gap: 4px;
+  /* 移动端卡片操作行优化 */
+  .desktop-tool-icons {
+    display: none !important;
   }
 
-  .btn-icon {
-    width: 28px;
-    height: 28px;
+  .btn-card-mobile-studio {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 32px;
+    padding: 0 9px;
+    border-radius: 7px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    color: var(--sony-orange);
+    font-size: 12px;
+    font-weight: 650;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .card-mobile-more-wrap {
+    display: block;
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  .btn-card-more {
+    width: 32px;
+    height: 32px;
+  }
+
+  /* 移动端 Lightroom 浮动操作坞 (Floating Dock) - 严密适配底部安全区 */
+  .mobile-bottom-bar {
+    position: fixed;
+    bottom: max(14px, env(safe-area-inset-bottom, 14px));
+    left: max(12px, env(safe-area-inset-left, 12px));
+    right: max(12px, env(safe-area-inset-right, 12px));
+    height: 52px;
+    background: rgba(18, 24, 38, 0.92);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 14px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 10px;
+    z-index: 900;
+  }
+
+  [data-theme="light"] .mobile-bottom-bar {
+    background: rgba(255, 255, 255, 0.94);
+    border-color: rgba(15, 23, 42, 0.12);
+    box-shadow: 0 8px 30px rgba(15, 23, 42, 0.12);
+  }
+
+  .mobile-dock-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .mobile-dock-count {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 650;
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+  }
+
+  .dock-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--sony-orange);
+  }
+
+  .mobile-dock-right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .mobile-btn-dock-tool {
+    height: 34px;
+    padding: 0 9px;
+    border-radius: 8px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    color: var(--text-primary);
+    font-size: 11px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+  }
+
+  .mobile-btn-dock-primary {
+    height: 34px;
+    padding: 0 12px;
+    border-radius: 8px;
+    background: var(--sony-orange);
+    border: 1px solid var(--sony-orange);
+    color: #ffffff;
+    font-size: 12px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    cursor: pointer;
+    box-shadow: 0 2px 8px var(--sony-orange-subtle);
   }
 
   .modal-sheet {
-    max-width: 95vw;
+    max-width: calc(100vw - 20px);
+    max-height: calc(88dvh - env(safe-area-inset-top, 0px));
     margin: 10px;
-    border-radius: 12px;
+    margin-top: max(10px, env(safe-area-inset-top, 10px));
+    margin-bottom: max(10px, env(safe-area-inset-bottom, 10px));
+    border-radius: 14px;
+  }
+
+  .lightbox-content {
+    max-width: calc(100vw - 20px);
+    max-height: calc(90dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
   }
 }
 
 @media (max-width: 480px) {
   .photo-grid {
     grid-template-columns: 1fr; /* 超小屏幕使用单列卡片大图模式 */
-  }
-  
-  .config-selectors {
-    grid-template-columns: 1fr; /* 单列选择器更易点击 */
   }
 }

@@ -21,7 +21,11 @@ import {
   FileImage,
   FileStack,
   Info,
-  Gauge
+  Gauge,
+  MoreHorizontal,
+  SlidersHorizontal,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import JSZip from 'jszip';
 import {
@@ -69,8 +73,19 @@ export default function App() {
   const [lightboxImg, setLightboxImg] = useState(null);
   const [studioTarget, setStudioTarget] = useState(null);
   const [exifTarget, setExifTarget] = useState(null);
+  const [isMobileConfigOpen, setIsMobileConfigOpen] = useState(false);
+  const [activeMenuId, setActiveMenuId] = useState(null);
 
   const fileInputRef = useRef(null);
+
+  // 点击空白处关闭卡片菜单
+  useEffect(() => {
+    const handleGlobalClick = () => {
+      setActiveMenuId(null);
+    };
+    window.addEventListener('click', handleGlobalClick);
+    return () => window.removeEventListener('click', handleGlobalClick);
+  }, []);
 
   // 同步主题至 html 根节点并持久化
   useEffect(() => {
@@ -596,7 +611,34 @@ export default function App() {
 
       {/* 核心控制条 (参数配置与主要操作) */}
       <section className="control-strip">
-        <div className="config-selectors">
+        {/* 移动端专属：极简配置摘要与展开按钮 */}
+        <div
+          className="mobile-config-summary"
+          onClick={() => setIsMobileConfigOpen((prev) => !prev)}
+        >
+          <div className="mobile-config-chips">
+            <span className="m-chip m-chip-look">
+              外观: {defaultLook.toUpperCase()}
+            </span>
+            <span className="m-chip m-chip-model">
+              标定: {targetModel === 'keep' ? '保持原机' : targetModel.toUpperCase()}
+            </span>
+            <span className="m-chip m-chip-wb">
+              色温: {wbOffset === '0' ? '0K' : `${wbOffset}K`}
+            </span>
+          </div>
+          <button
+            type="button"
+            className="btn-mobile-toggle-config"
+            aria-label="展开全局配置"
+          >
+            <SlidersHorizontal size={13} />
+            <span>{isMobileConfigOpen ? '收起' : '参数'}</span>
+            {isMobileConfigOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+          </button>
+        </div>
+
+        <div className={`config-selectors ${isMobileConfigOpen ? 'mobile-expanded' : ''}`}>
           {/* 预设外观 */}
           <div className="select-pill">
             <label>目标外观</label>
@@ -854,7 +896,7 @@ export default function App() {
                       onOpenExifModal={() => setExifTarget(item)}
                     />
 
-                    {/* 底部操作工具栏 (左侧大主按钮，右侧 4 个标准辅助工具按钮) */}
+                    {/* 底部操作工具栏 */}
                     <div className="card-actions-row">
                       {item.status === 'done' ? (
                         <button
@@ -882,7 +924,101 @@ export default function App() {
                         </button>
                       )}
 
-                      <div className="card-tool-icons">
+                      {/* 移动端快捷调色暗房入口 */}
+                      <button
+                        type="button"
+                        className="btn-card-mobile-studio"
+                        onClick={() => {
+                          if (item.previewUrl) setStudioTarget(item);
+                        }}
+                        title="打开调色暗房"
+                      >
+                        <Palette size={13} />
+                        <span>调色</span>
+                      </button>
+
+                      {/* 移动端专属：更多操作气泡菜单 */}
+                      <div className="card-mobile-more-wrap">
+                        <button
+                          type="button"
+                          className="btn-tool-icon btn-card-more"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setActiveMenuId((prev) => (prev === item.id ? null : item.id));
+                          }}
+                          aria-label="更多操作"
+                        >
+                          <MoreHorizontal size={15} />
+                        </button>
+
+                        {activeMenuId === item.id && (
+                          <div
+                            className="card-more-menu-dropdown"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <button
+                              type="button"
+                              className="menu-item"
+                              onClick={() => {
+                                setActiveMenuId(null);
+                                handleExtractSingleJpeg(item);
+                              }}
+                            >
+                              <FileImage size={14} />
+                              <span>提取全尺寸 JPG</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="menu-item"
+                              onClick={() => {
+                                setActiveMenuId(null);
+                                handleExportSingleTiff(item);
+                              }}
+                              disabled={Boolean(exportingTiffId)}
+                            >
+                              <FileStack size={14} />
+                              <span>导出 16-bit TIFF</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="menu-item"
+                              onClick={() => {
+                                setActiveMenuId(null);
+                                handleToggleOrientation(item.id);
+                              }}
+                            >
+                              <RotateCw size={14} />
+                              <span>旋转纠偏 90°</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="menu-item"
+                              onClick={() => {
+                                setActiveMenuId(null);
+                                setExifTarget(item);
+                              }}
+                            >
+                              <Info size={14} />
+                              <span>EXIF 元数据详情</span>
+                            </button>
+                            <div className="menu-divider" />
+                            <button
+                              type="button"
+                              className="menu-item menu-item-danger"
+                              onClick={() => {
+                                setActiveMenuId(null);
+                                handleRemoveFile(item.id);
+                              }}
+                            >
+                              <Trash2 size={14} />
+                              <span>移除此照片</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 桌面端完整工具图标组 (在桌面端展示，移动端由更多菜单替代) */}
+                      <div className="card-tool-icons desktop-tool-icons">
                         <button
                           type="button"
                           className="btn-tool-icon"
@@ -950,44 +1086,65 @@ export default function App() {
       {/* 手机端吸底固定操作栏 (Sticky Bottom Bar) */}
       {files.length > 0 && (
         <div className="mobile-bottom-bar">
-          <div className="mobile-count-info">
-            <span>{doneCount} / {files.length} 完成</span>
+          <div className="mobile-dock-left">
+            <span className="mobile-dock-count">
+              {doneCount === files.length && files.length > 0 ? (
+                <CheckCircle2 size={13} color="var(--status-success)" />
+              ) : (
+                <span className="dock-dot" />
+              )}
+              <span>{doneCount} / {files.length} 就绪</span>
+            </span>
           </div>
 
-          <div className="mobile-btn-group">
+          <div className="mobile-dock-right">
             <button
-              className="mobile-btn mobile-download-btn"
-              onClick={handleExtractAllJpegsZip}
-              title="批量提取所有照片内嵌的高清 JPG"
+              type="button"
+              className="mobile-btn-dock-tool"
+              onClick={() => fileInputRef.current?.click()}
+              title="继续添加 ARW 照片"
             >
-              <FileImage size={15} />
-              提取 JPG
+              <Plus size={15} />
+              <span>添加</span>
             </button>
 
-            {doneCount > 1 && (
+            {doneCount > 1 ? (
               <button
-                className="mobile-btn mobile-download-btn"
+                type="button"
+                className="mobile-btn-dock-tool"
                 onClick={handleDownloadAllZip}
+                title="导出所有已注入照片的 ZIP 包"
               >
                 <Archive size={15} />
-                导出 ZIP
+                <span>ZIP</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="mobile-btn-dock-tool"
+                onClick={handleExtractAllJpegsZip}
+                title="批量提取所有照片的高清 JPG"
+              >
+                <FileImage size={15} />
+                <span>JPG</span>
               </button>
             )}
 
             <button
-              className="mobile-btn mobile-unlock-btn"
+              type="button"
+              className="mobile-btn-dock-primary"
               onClick={handleProcessAll}
               disabled={isProcessingAll}
             >
               {isProcessingAll ? (
                 <>
-                  <RefreshCw size={15} className="spin" />
-                  处理中...
+                  <RefreshCw size={14} className="spin" />
+                  <span>处理中</span>
                 </>
               ) : (
                 <>
-                  <CheckCircle2 size={15} />
-                  批量处理全部
+                  <CheckCircle2 size={14} />
+                  <span>一键注入全部</span>
                 </>
               )}
             </button>
