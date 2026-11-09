@@ -143,7 +143,7 @@ export function getJpegExifOrientation(buf) {
           const u16 = (o) => isLe ? (buf[o] | (buf[o + 1] << 8)) : ((buf[o] << 8) | buf[o + 1]);
           const u32 = (o) => isLe
             ? ((buf[o] | (buf[o + 1] << 8) | (buf[o + 2] << 16) | (buf[o + 3] << 24)) >>> 0)
-            : (((buf[off] << 24) | (buf[o + 1] << 16) | (buf[o + 2] << 8) | buf[o + 3]) >>> 0);
+            : (((buf[o] << 24) | (buf[o + 1] << 16) | (buf[o + 2] << 8) | buf[o + 3]) >>> 0);
 
           const ifdOffset = u32(tiffStart + 4);
           let curr = tiffStart + ifdOffset;
@@ -578,4 +578,33 @@ export function downloadJpegBytes(bytes, fileName = 'preview.jpg') {
   a.click();
   document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/**
+ * 专门解析普通 JPEG 文件（非 ARW 内嵌）的字节数据、真实尺寸与 EXIF 方向
+ * @param {File | Blob | ArrayBuffer | Uint8Array} fileOrBuffer
+ * @returns {Promise<{ bytes: Uint8Array, hdBytes: Uint8Array, previewBytes: Uint8Array, orientationInfo: ReturnType<typeof computeOrientationInfo> }>}
+ */
+export async function extractJpegInfo(fileOrBuffer) {
+  let fullBytes;
+  if (fileOrBuffer instanceof Blob || (typeof File !== 'undefined' && fileOrBuffer instanceof File)) {
+    fullBytes = new Uint8Array(await fileOrBuffer.arrayBuffer());
+  } else if (fileOrBuffer instanceof ArrayBuffer) {
+    fullBytes = new Uint8Array(fileOrBuffer);
+  } else if (fileOrBuffer instanceof Uint8Array) {
+    fullBytes = fileOrBuffer;
+  } else {
+    throw new Error('不支持的文件对象类型');
+  }
+
+  const dims = getJpegDimensions(fullBytes);
+  const jpegOrientation = getJpegExifOrientation(fullBytes);
+  const orientationInfo = computeOrientationInfo(dims.width, dims.height, jpegOrientation);
+
+  return {
+    bytes: fullBytes,
+    hdBytes: fullBytes,
+    previewBytes: fullBytes,
+    orientationInfo,
+  };
 }

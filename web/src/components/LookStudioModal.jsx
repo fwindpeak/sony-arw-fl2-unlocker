@@ -330,7 +330,7 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
       setIsDraggingSplit(false);
       try {
         containerRef.current.releasePointerCapture?.(e.pointerId);
-      } catch {}
+      } catch { }
     }
   };
 
@@ -845,7 +845,7 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
               <div className="btn-text-col">
                 <span className="btn-main-text">
                   {fullResDims
-                    ? `导出全像素照片 (${fullResDims.width}×${fullResDims.height})`
+                    ? `导出JPG (${fullResDims.width}×${fullResDims.height})`
                     : '导出高质量照片 (JPG)'}
                 </span>
                 <span className="btn-sub-text">
