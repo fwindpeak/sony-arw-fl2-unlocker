@@ -725,6 +725,18 @@ input[type="range"]::-webkit-slider-thumb:hover {
   border-color: var(--border-strong);
 }
 
+.studio-btn-raw {
+  background: var(--bg-panel);
+  border-color: var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.studio-btn-raw:hover:not(:disabled) {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
 .studio-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;

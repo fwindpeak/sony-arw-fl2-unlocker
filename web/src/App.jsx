@@ -17,12 +17,8 @@ import {
   RectangleHorizontal,
   RectangleVertical,
   CheckCircle2,
-  RotateCw,
   FileImage,
-  FileStack,
-  Info,
   Gauge,
-  MoreHorizontal,
   SlidersHorizontal,
   ChevronDown,
   ChevronUp
@@ -34,15 +30,14 @@ import {
 } from './core/camoufArw';
 import {
   extractPreviewWithInfo,
+  extractJpegInfo,
   createOrientedJpegUrl,
   createJpegObjectUrl,
   detectImageOrientation,
   downloadJpegBytes
 } from './core/previewExtractor';
 import { parsePhotoExif } from './core/exifReader';
-import { downloadBlob } from './core/tiffExporter';
 import { SonyColorRenderer } from './core/sonyColorEngine';
-import { SonyRawDecoder } from './core/rawDecoder';
 import LookStudioModal from './components/LookStudioModal';
 import ExifBadge from './components/ExifBadge';
 import ExifViewerModal from './components/ExifViewerModal';
@@ -67,25 +62,14 @@ export default function App() {
   const [profileMode, setProfileMode] = useState('balanced');
   const [wbOffset, setWbOffset] = useState('0');
   const [isProcessingAll, setIsProcessingAll] = useState(false);
-  const [exportingTiffId, setExportingTiffId] = useState(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [lightboxImg, setLightboxImg] = useState(null);
   const [studioTarget, setStudioTarget] = useState(null);
   const [exifTarget, setExifTarget] = useState(null);
   const [isMobileConfigOpen, setIsMobileConfigOpen] = useState(false);
-  const [activeMenuId, setActiveMenuId] = useState(null);
 
   const fileInputRef = useRef(null);
-
-  // 点击空白处关闭卡片菜单
-  useEffect(() => {
-    const handleGlobalClick = () => {
-      setActiveMenuId(null);
-    };
-    window.addEventListener('click', handleGlobalClick);
-    return () => window.removeEventListener('click', handleGlobalClick);
-  }, []);
 
   // 同步主题至 html 根节点并持久化
   useEffect(() => {
@@ -109,16 +93,17 @@ export default function App() {
     };
   }, []);
 
-  // 添加文件到队列并异步解析内嵌预览图、EXIF 方向与元数据
+  // 添加文件到队列并异步解析预览图、EXIF 方向与元数据 (兼容 ARW 与相机普通 JPG)
   const addFilesToQueue = async (newFileList) => {
-    const rawFiles = Array.from(newFileList).filter((f) =>
-      /\.(arw|srf|sr2)$/i.test(f.name)
+    const supportedFiles = Array.from(newFileList).filter((f) =>
+      /\.(arw|srf|sr2|jpe?g)$/i.test(f.name)
     );
 
-    if (rawFiles.length === 0) return;
+    if (supportedFiles.length === 0) return;
 
     const newItems = await Promise.all(
-      rawFiles.map(async (file) => {
+      supportedFiles.map(async (file) => {
+        const isJpeg = /\.(jpe?g)$/i.test(file.name);
         const id = `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2, 8)}`;
 
         let info = null;
@@ -128,37 +113,73 @@ export default function App() {
         let orientationInfo = null;
         let exifResult = null;
 
-        try {
-          // 1. 切片 256KB 极速解析 ARW 结构元数据
-          const sliceHeader = await file.slice(0, 256 * 1024).arrayBuffer();
-          info = inspectArw(sliceHeader, file.name);
-        } catch (e) {
-          console.warn('元数据解析提示:', e);
-        }
-
-        try {
-          // 2. 提取内嵌全像素高清 JPEG (几兆) 与 EXIF 方向信息
-          // 同时提取轻量预览用于网页流畅呈现，按 Orientation 纠偏旋转物理像素
-          const result = await extractPreviewWithInfo(file);
-          orientationInfo = result.orientationInfo;
-          hdBytes = result.hdBytes || result.bytes || null;
-          previewBytes = hdBytes;
-          const displayBytes = result.previewBytes || hdBytes;
-          if (displayBytes) {
-            previewUrl = await createOrientedJpegUrl(
-              displayBytes,
-              orientationInfo?.exifOrientation || 1
-            );
+        if (isJpeg) {
+          // 相机普通 JPG 处理流程
+          try {
+            // 1. 深度解析 EXIF 元数据与快门计数
+            exifResult = await parsePhotoExif(file);
+          } catch (e) {
+            console.warn('JPG EXIF 解析提示:', e);
           }
-        } catch (e) {
-          console.warn('预览图解析提示:', e);
-        }
 
-        try {
-          // 3. 参照 LensMark 解析完整 EXIF 元数据并提取硬件快门计数 (Sony Tag 0x9050 等)
-          exifResult = await parsePhotoExif(file);
-        } catch (e) {
-          console.warn('EXIF 与快门数解析提示:', e);
+          try {
+            // 2. 提取 JPG 全字节数据并按 EXIF 拍摄方向旋转物理像素
+            const result = await extractJpegInfo(file);
+            orientationInfo = result.orientationInfo;
+            hdBytes = result.hdBytes;
+            previewBytes = result.previewBytes;
+            if (previewBytes) {
+              previewUrl = await createOrientedJpegUrl(
+                previewBytes,
+                orientationInfo?.exifOrientation || 1
+              );
+            }
+          } catch (e) {
+            console.warn('JPG 图像解析提示:', e);
+            previewUrl = URL.createObjectURL(file);
+          }
+
+          // 构造机型与直出标签
+          const cameraModel = exifResult?.overview?.model || '相机 JPG';
+          info = {
+            cameraModel,
+            activeLook: '原图直出',
+            isJpeg: true,
+          };
+        } else {
+          // 索尼 ARW / SRF / SR2 原始文件处理流程
+          try {
+            // 1. 切片 256KB 极速解析 ARW 结构元数据
+            const sliceHeader = await file.slice(0, 256 * 1024).arrayBuffer();
+            info = inspectArw(sliceHeader, file.name);
+          } catch (e) {
+            console.warn('元数据解析提示:', e);
+          }
+
+          try {
+            // 2. 提取内嵌全像素高清 JPEG (几兆) 与 EXIF 方向信息
+            // 同时提取轻量预览用于网页流畅呈现，按 Orientation 纠偏旋转物理像素
+            const result = await extractPreviewWithInfo(file);
+            orientationInfo = result.orientationInfo;
+            hdBytes = result.hdBytes || result.bytes || null;
+            previewBytes = hdBytes;
+            const displayBytes = result.previewBytes || hdBytes;
+            if (displayBytes) {
+              previewUrl = await createOrientedJpegUrl(
+                displayBytes,
+                orientationInfo?.exifOrientation || 1
+              );
+            }
+          } catch (e) {
+            console.warn('预览图解析提示:', e);
+          }
+
+          try {
+            // 3. 参照 LensMark 解析完整 EXIF 元数据并提取硬件快门计数 (Sony Tag 0x9050 等)
+            exifResult = await parsePhotoExif(file);
+          } catch (e) {
+            console.warn('EXIF 与快门数解析提示:', e);
+          }
         }
 
         return {
@@ -166,6 +187,7 @@ export default function App() {
           file,
           name: file.name,
           size: file.size,
+          isJpeg,
           status: 'pending',
           error: null,
           info,
@@ -202,7 +224,7 @@ export default function App() {
     }
   };
 
-  // 单个文件注入处理
+  // 单个文件注入 / 调色处理 (支持 ARW 注入与普通相机 JPG 渲染调色)
   const processSingleFile = async (item, lookOverride = null, wbOverride = null) => {
     setFiles((prev) =>
       prev.map((f) =>
@@ -211,9 +233,78 @@ export default function App() {
     );
 
     try {
-      const fullBuffer = await item.file.arrayBuffer();
       const effLook = lookOverride || defaultLook;
       const effWb = wbOverride !== null && wbOverride !== undefined ? Number(wbOverride) : Number(wbOffset);
+
+      if (item.isJpeg) {
+        // 普通相机 JPG：基于 WebGL 创意外观 3D-LUT 引擎进行全分辨率色彩渲染
+        const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
+        const orientedUrl = item.previewUrl || (await createOrientedJpegUrl(
+          item.previewBytes || new Uint8Array(await item.file.arrayBuffer()),
+          item.orientationInfo?.exifOrientation || 1
+        ));
+
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.src = orientedUrl;
+        await img.decode();
+
+        const params = {
+          look: effLook === 'keep' ? 'ST' : effLook.toUpperCase(),
+          wbOffset: effWb,
+          lutIntensity: 1.0,
+          exposure: 0.0,
+          contrast: 0.0,
+          highlights: 0.0,
+          shadows: 0.0,
+          tint: 0.0,
+          saturation: 1.0,
+          isRaw: false,
+        };
+
+        const resultBlob = await SonyColorRenderer.exportFullResolution({
+          fullImg: img,
+          params,
+          basePath,
+          quality: 0.96,
+        });
+
+        const blobUrl = URL.createObjectURL(resultBlob);
+        const arrayBuffer = await resultBlob.arrayBuffer();
+        const outputUint8 = new Uint8Array(arrayBuffer);
+
+        setFiles((prev) =>
+          prev.map((f) =>
+            f.id === item.id
+              ? {
+                ...f,
+                status: 'done',
+                processedBlobUrl: blobUrl,
+                processedBuffer: outputUint8,
+                previewUrl: blobUrl,
+                info: {
+                  ...f.info,
+                  activeLook: effLook.toUpperCase(),
+                },
+              }
+              : f
+          )
+        );
+
+        if (lookOverride) {
+          const baseName = item.name.replace(/\.[^/.]+$/, '');
+          const a = document.createElement('a');
+          a.href = blobUrl;
+          a.download = `${baseName}_${effLook.toUpperCase()}.jpg`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        }
+
+        return true;
+      }
+
+      const fullBuffer = await item.file.arrayBuffer();
 
       let newPreviewUrl = null;
 
@@ -309,9 +400,15 @@ export default function App() {
     }
   };
 
-  // 提取单张照片内嵌的全像素高清 JPG (通常几兆，如 7008x4672)
+  // 提取单张照片内嵌全像素高清 JPG 或保存原始 JPG
   const handleExtractSingleJpeg = async (item) => {
     try {
+      if (item.isJpeg) {
+        const bytes = item.previewBytes || new Uint8Array(await item.file.arrayBuffer());
+        downloadJpegBytes(bytes, item.name);
+        return;
+      }
+
       let jpegBytes = item.hdBytes || item.previewBytes;
       if (!jpegBytes && item.file) {
         const res = await extractPreviewWithInfo(item.file);
@@ -326,12 +423,12 @@ export default function App() {
       const baseName = item.name.replace(/\.[^/.]+$/, '');
       downloadJpegBytes(jpegBytes, `${baseName}_embedded_hd.jpg`);
     } catch (e) {
-      console.warn('提取内嵌全像素高清 JPG 异常:', e);
-      alert('提取内嵌全像素高清 JPG 失败: ' + e.message);
+      console.warn('提取/保存 JPG 异常:', e);
+      alert('保存 JPG 失败: ' + e.message);
     }
   };
 
-  // 批量提取所有照片内嵌的全像素高清 JPG 并打包为 ZIP
+  // 批量提取所有照片内嵌的高清 JPG 或原始 JPG 并打包为 ZIP
   const handleExtractAllJpegsZip = async () => {
     if (files.length === 0) return;
     const zip = new JSZip();
@@ -339,12 +436,17 @@ export default function App() {
     for (const item of files) {
       let jpegBytes = item.hdBytes || item.previewBytes;
       if (!jpegBytes && item.file) {
-        const res = await extractPreviewWithInfo(item.file);
-        jpegBytes = res.hdBytes || res.bytes;
+        if (item.isJpeg) {
+          jpegBytes = new Uint8Array(await item.file.arrayBuffer());
+        } else {
+          const res = await extractPreviewWithInfo(item.file);
+          jpegBytes = res.hdBytes || res.bytes;
+        }
       }
       if (jpegBytes) {
         const baseName = item.name.replace(/\.[^/.]+$/, '');
-        zip.file(`${baseName}_embedded_hd.jpg`, jpegBytes);
+        const filename = item.isJpeg ? item.name : `${baseName}_embedded_hd.jpg`;
+        zip.file(filename, jpegBytes);
       }
     }
 
@@ -352,101 +454,14 @@ export default function App() {
     const url = URL.createObjectURL(zipBlob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `Sony_ARW_Embedded_HD_JPEGs_${Date.now()}.zip`;
+    a.download = `Camera_Photos_JPEGs_${Date.now()}.zip`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
 
-  // 核心渲染函数：施加用户选定的索尼创意外观 (FL2/FL3/IN/SH...)，以 16-bit 线性渲染并封装为无损 TIFF
-  const renderItemToTiff16 = async (item) => {
-    const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
-    const look = (defaultLook || item.info?.activeLook || 'FL2').toUpperCase();
-    const model = item.info?.cameraModel || item.exifResult?.overview?.model || 'ILCE-7C2';
-
-    let sourceImg = null;
-    let isRawSource = true;
-
-    try {
-      const decoder = new SonyRawDecoder();
-      const decoded = await decoder.decode(item.file, { halfSize: false });
-      decoder.dispose();
-      if (decoded && (decoded.rgb16Data || decoded.imageData)) {
-        if (decoded.rgb16Data) {
-          sourceImg = { rgb16Data: decoded.rgb16Data, width: decoded.width, height: decoded.height };
-        } else {
-          const canvas = document.createElement('canvas');
-          canvas.width = decoded.width;
-          canvas.height = decoded.height;
-          const ctx = canvas.getContext('2d');
-          ctx.putImageData(decoded.imageData, 0, 0);
-          sourceImg = canvas;
-        }
-        isRawSource = true;
-      }
-    } catch (err) {
-      console.warn('RAW 解码失败，尝试内嵌高清底片:', err);
-    }
-
-    if (!sourceImg && item.file) {
-      const fullResInfo = await extractPreviewWithInfo(item.file);
-      const bytes = fullResInfo?.hdBytes || fullResInfo?.bytes;
-      if (bytes) {
-        const orientedUrl = await createOrientedJpegUrl(bytes, 1);
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-        img.src = orientedUrl;
-        await img.decode();
-        sourceImg = img;
-        isRawSource = false;
-      }
-    }
-
-    if (!sourceImg) {
-      throw new Error('未能加载可用的 RAW 像素源');
-    }
-
-    const params = {
-      look,
-      lutIntensity: 1.0,
-      exposure: 0.0,
-      contrast: 0.0,
-      highlights: 0.0,
-      shadows: 0.0,
-      wbOffset: parseInt(wbOffset, 10) || 0,
-      tint: 0.0,
-      saturation: 1.0,
-      isRaw: isRawSource,
-    };
-
-    const blob = await SonyColorRenderer.exportFullResolutionTiff16({
-      fullImg: sourceImg,
-      params,
-      basePath,
-      model,
-    });
-
-    return { blob, look };
-  };
-
-  // 导出单张 16-bit 无损母版 TIFF (完整施加选中的创意外观 3D-LUT 与胶片色彩曲线)
-  const handleExportSingleTiff = async (item) => {
-    if (!item.file || exportingTiffId) return;
-    setExportingTiffId(item.id);
-    try {
-      const { blob, look } = await renderItemToTiff16(item);
-      const baseName = item.name.replace(/\.[^/.]+$/, '');
-      downloadBlob(blob, `${baseName}_${look}_16bit.tiff`);
-    } catch (err) {
-      console.error('导出 16-bit TIFF 失败:', err);
-      alert('导出 16-bit TIFF 失败: ' + (err.message || '未知错误'));
-    } finally {
-      setExportingTiffId(null);
-    }
-  };
-
-  // 批量注入全部文件
+  // 批量注入 / 调色全部文件
   const handleProcessAll = async () => {
     if (files.length === 0 || isProcessingAll) return;
 
@@ -459,14 +474,16 @@ export default function App() {
     setIsProcessingAll(false);
   };
 
-  // 单独下载文件
+  // 单独下载文件 (支持调色后的 JPG 与注入后的 ARW)
   const handleDownloadSingle = (item) => {
     if (!item.processedBlobUrl) return;
     const baseName = item.name.replace(/\.[^/.]+$/, '');
     const ext = item.name.substring(item.name.lastIndexOf('.'));
     const a = document.createElement('a');
     a.href = item.processedBlobUrl;
-    a.download = `${baseName}_looks${ext}`;
+    a.download = item.isJpeg
+      ? `${baseName}_${item.info?.activeLook || 'look'}.jpg`
+      : `${baseName}_looks${ext}`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -481,7 +498,10 @@ export default function App() {
     for (const item of doneFiles) {
       const baseName = item.name.replace(/\.[^/.]+$/, '');
       const ext = item.name.substring(item.name.lastIndexOf('.'));
-      zip.file(`${baseName}_looks${ext}`, item.processedBuffer);
+      const filename = item.isJpeg
+        ? `${baseName}_${item.info?.activeLook || 'look'}.jpg`
+        : `${baseName}_looks${ext}`;
+      zip.file(filename, item.processedBuffer);
     }
 
     const zipBlob = await zip.generateAsync({ type: 'blob' });
@@ -546,7 +566,7 @@ export default function App() {
         ref={fileInputRef}
         type="file"
         multiple
-        accept=".arw,.srf,.sr2"
+        accept=".arw,.srf,.sr2,.jpg,.jpeg,.JPG,.JPEG"
         style={{ display: 'none' }}
         onChange={(e) => {
           if (e.target.files) addFilesToQueue(e.target.files);
@@ -741,7 +761,11 @@ export default function App() {
             ) : (
               <>
                 <CheckCircle2 size={14} />
-                批量注入处理 {files.length > 0 && `(${files.length})`}
+                {files.every((f) => f.isJpeg)
+                  ? '批量调色处理'
+                  : files.some((f) => f.isJpeg)
+                    ? '批量处理 (注入/调色)'
+                    : '批量注入处理'} {files.length > 0 && `(${files.length})`}
               </>
             )}
           </button>
@@ -762,14 +786,13 @@ export default function App() {
             <div className="upload-circle">
               <Upload size={32} />
             </div>
-            <h2 className="upload-title">导入索尼 ARW 原始文件</h2>
+            <h2 className="upload-title">导入索尼 ARW 原始文件或相机普通 JPG</h2>
             <p className="upload-desc">
-              支持点击选择或直接将 ARW 拖入此处。解析与外观注入全部在浏览器本地内存中执行，保护原创数据。
+              支持点击选择或直接将 ARW 与相机 JPG 拖入此处。在浏览器本地直接极速预览、加载创意外观 3D-LUT 胶片调色、深度解析 EXIF 拍摄参数与硬件快门数。
             </p>
             <div className="upload-tags">
               <span>.ARW</span>
-              <span>.SR2</span>
-              <span>.SRF</span>
+              <span>.JPG / .JPEG</span>
             </div>
             <button className="upload-btn-mobile" type="button">
               选择文件
@@ -783,7 +806,9 @@ export default function App() {
                 已导入 {files.length} 张照片 · {doneCount} 张就绪
               </span>
               <span className="gallery-hint">
-                在 Sony Imaging Edge Edit 中打开导出的 ARW 即可在「创意外观」中选用 FL2 / FL3
+                {files.some((f) => f.isJpeg)
+                  ? '点击照片可进入调色暗房施加 12 款索尼创意外观 LUT 并导出高清调色照片，亦可查看完整拍摄 EXIF'
+                  : '在 Sony Imaging Edge Edit 中打开导出的 ARW 即可在「创意外观」中选用 FL2 / FL3'}
               </span>
             </div>
 
@@ -832,7 +857,7 @@ export default function App() {
                       {item.status === 'done' ? (
                         <span className="thumb-pill-done">
                           <Check size={11} />
-                          <span>已注入</span>
+                          <span>{item.isJpeg ? '已调色' : '已注入'}</span>
                         </span>
                       ) : item.orientationInfo ? (
                         <span className="thumb-pill-neutral">
@@ -896,184 +921,86 @@ export default function App() {
                       onOpenExifModal={() => setExifTarget(item)}
                     />
 
-                    {/* 底部操作工具栏 */}
+                    {/* 底部精简操作工具栏：仅保留核心主操作、详情调色与删除 */}
                     <div className="card-actions-row">
-                      {item.status === 'done' ? (
-                        <button
-                          type="button"
-                          className="btn-card-primary btn-card-save"
-                          onClick={() => handleDownloadSingle(item)}
-                          title="导出注入外观后的 ARW 文件"
-                        >
-                          <Download size={13} />
-                          <span>导出 ARW</span>
-                        </button>
+                      {item.isJpeg ? (
+                        item.status === 'done' ? (
+                          <button
+                            type="button"
+                            className="btn-card-primary btn-card-save"
+                            onClick={() => handleDownloadSingle(item)}
+                            title="导出应用创意外观 LUT 后的 JPG 照片"
+                          >
+                            <Download size={13} />
+                            <span>导出调色 JPG</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn-card-primary btn-card-unlock"
+                            onClick={() => processSingleFile(item)}
+                            disabled={item.status === 'processing' || isProcessingAll}
+                            title="使用当前外观预设快速调色"
+                          >
+                            {item.status === 'processing' ? (
+                              <RefreshCw size={13} className="spin" />
+                            ) : (
+                              <Palette size={13} />
+                            )}
+                            <span>加外观调色</span>
+                          </button>
+                        )
                       ) : (
-                        <button
-                          type="button"
-                          className="btn-card-primary btn-card-unlock"
-                          onClick={() => processSingleFile(item)}
-                          disabled={item.status === 'processing' || isProcessingAll}
-                        >
-                          {item.status === 'processing' ? (
-                            <RefreshCw size={13} className="spin" />
-                          ) : (
-                            <CheckCircle2 size={13} />
-                          )}
-                          <span>注入外观</span>
-                        </button>
+                        item.status === 'done' ? (
+                          <button
+                            type="button"
+                            className="btn-card-primary btn-card-save"
+                            onClick={() => handleDownloadSingle(item)}
+                            title="导出注入外观后的 ARW 文件"
+                          >
+                            <Download size={13} />
+                            <span>导出 ARW</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn-card-primary btn-card-unlock"
+                            onClick={() => processSingleFile(item)}
+                            disabled={item.status === 'processing' || isProcessingAll}
+                          >
+                            {item.status === 'processing' ? (
+                              <RefreshCw size={13} className="spin" />
+                            ) : (
+                              <CheckCircle2 size={13} />
+                            )}
+                            <span>注入外观</span>
+                          </button>
+                        )
                       )}
 
-                      {/* 移动端快捷调色暗房入口 */}
+                      {/* 详情与调色暗房入口 */}
                       <button
                         type="button"
-                        className="btn-card-mobile-studio"
+                        className="btn-card-secondary"
                         onClick={() => {
                           if (item.previewUrl) setStudioTarget(item);
                         }}
-                        title="打开调色暗房"
+                        title="进入详情页：查看大图、加LUT调色、分屏对比、旋转与母版导出"
                       >
-                        <Palette size={13} />
-                        <span>调色</span>
+                        <Sliders size={13} />
+                        <span>详情调色</span>
                       </button>
 
-                      {/* 移动端专属：更多操作气泡菜单 */}
-                      <div className="card-mobile-more-wrap">
-                        <button
-                          type="button"
-                          className="btn-tool-icon btn-card-more"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setActiveMenuId((prev) => (prev === item.id ? null : item.id));
-                          }}
-                          aria-label="更多操作"
-                        >
-                          <MoreHorizontal size={15} />
-                        </button>
-
-                        {activeMenuId === item.id && (
-                          <div
-                            className="card-more-menu-dropdown"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <button
-                              type="button"
-                              className="menu-item"
-                              onClick={() => {
-                                setActiveMenuId(null);
-                                handleExtractSingleJpeg(item);
-                              }}
-                            >
-                              <FileImage size={14} />
-                              <span>提取全尺寸 JPG</span>
-                            </button>
-                            <button
-                              type="button"
-                              className="menu-item"
-                              onClick={() => {
-                                setActiveMenuId(null);
-                                handleExportSingleTiff(item);
-                              }}
-                              disabled={Boolean(exportingTiffId)}
-                            >
-                              <FileStack size={14} />
-                              <span>导出 16-bit TIFF</span>
-                            </button>
-                            <button
-                              type="button"
-                              className="menu-item"
-                              onClick={() => {
-                                setActiveMenuId(null);
-                                handleToggleOrientation(item.id);
-                              }}
-                            >
-                              <RotateCw size={14} />
-                              <span>旋转纠偏 90°</span>
-                            </button>
-                            <button
-                              type="button"
-                              className="menu-item"
-                              onClick={() => {
-                                setActiveMenuId(null);
-                                setExifTarget(item);
-                              }}
-                            >
-                              <Info size={14} />
-                              <span>EXIF 元数据详情</span>
-                            </button>
-                            <div className="menu-divider" />
-                            <button
-                              type="button"
-                              className="menu-item menu-item-danger"
-                              onClick={() => {
-                                setActiveMenuId(null);
-                                handleRemoveFile(item.id);
-                              }}
-                            >
-                              <Trash2 size={14} />
-                              <span>移除此照片</span>
-                            </button>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* 桌面端完整工具图标组 (在桌面端展示，移动端由更多菜单替代) */}
-                      <div className="card-tool-icons desktop-tool-icons">
-                        <button
-                          type="button"
-                          className="btn-tool-icon"
-                          onClick={() => handleExtractSingleJpeg(item)}
-                          title="提取内嵌全像素高清 JPG 原底"
-                          aria-label="提取高清 JPG"
-                        >
-                          <FileImage size={14} />
-                        </button>
-
-                        <button
-                          type="button"
-                          className="btn-tool-icon"
-                          onClick={() => handleExportSingleTiff(item)}
-                          disabled={Boolean(exportingTiffId)}
-                          title="导出 16-bit 无损母版 TIFF (保留 14-bit 满动态范围，48位 RGB · Adobe RGB 广色域，供 PS/LR/Capture One 专业后期精修)"
-                          aria-label="导出 16-bit TIFF"
-                        >
-                          {exportingTiffId === item.id ? (
-                            <RefreshCw size={13} className="spin" />
-                          ) : (
-                            <FileStack size={14} />
-                          )}
-                        </button>
-
-                        <button
-                          type="button"
-                          className="btn-tool-icon"
-                          onClick={() => handleToggleOrientation(item.id)}
-                          title="旋转纠偏画面方向 (90°)"
-                          aria-label="旋转方向"
-                        >
-                          <RotateCw size={13} />
-                        </button>
-
-                        <button
-                          type="button"
-                          className="btn-tool-icon"
-                          onClick={() => setExifTarget(item)}
-                          title="查看完整 EXIF 元数据与外观槽位结构"
-                          aria-label="元数据详情"
-                        >
-                          <Info size={14} />
-                        </button>
-
-                        <button
-                          type="button"
-                          className="btn-tool-icon btn-tool-danger"
-                          onClick={() => handleRemoveFile(item.id)}
-                          title="从队列中移除此文件"
-                          aria-label="移除文件"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
+                      {/* 移除照片 */}
+                      <button
+                        type="button"
+                        className="btn-tool-icon btn-tool-danger"
+                        onClick={() => handleRemoveFile(item.id)}
+                        title="从列表中移除此照片"
+                        aria-label="移除照片"
+                      >
+                        <Trash2 size={13} />
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -1218,12 +1145,15 @@ export default function App() {
         </div>
       )}
 
-      {/* 索尼创意外观调色暗房 */}
+      {/* 索尼创意外观调色暗房 / 照片详情工作台 */}
       {studioTarget && (
         <LookStudioModal
           photoItem={studioTarget}
           onClose={() => setStudioTarget(null)}
           onApplyToArw={processSingleFile}
+          onOpenExif={(item) => setExifTarget(item || studioTarget)}
+          onToggleOrientation={(id) => handleToggleOrientation(id)}
+          onExtractOriginal={(item) => handleExtractSingleJpeg(item || studioTarget)}
         />
       )}
 

@@ -3,7 +3,7 @@ import {
   X,
   Download,
   RotateCcw,
-  Sliders,
+  RotateCw,
   Columns,
   Eye,
   Sun,
@@ -15,15 +15,18 @@ import {
   ZoomOut,
   Maximize2,
   CheckCircle2,
-  Layers2,
   Gauge,
   FileStack,
-  Share2,
-  Sparkles,
-  Info
+  FileImage,
+  Info,
 } from 'lucide-react';
 import { SONY_CREATIVE_LOOKS, SonyColorRenderer } from '../core/sonyColorEngine';
-import { extractFullResJpegFromArw, createOrientedJpegUrl } from '../core/previewExtractor';
+import {
+  extractFullResJpegFromArw,
+  createOrientedJpegUrl,
+  extractPreviewWithInfo,
+  downloadJpegBytes,
+} from '../core/previewExtractor';
 import { SonyRawDecoder } from '../core/rawDecoder';
 import { downloadBlob } from '../core/tiffExporter';
 import './LookStudioModal.css';
@@ -106,13 +109,53 @@ function SliderRow({
   );
 }
 
-export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
+export default function LookStudioModal({
+  photoItem,
+  onClose,
+  onApplyToArw,
+  onOpenExif,
+  onToggleOrientation,
+  onExtractOriginal,
+}) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const rendererRef = useRef(null);
 
   // 移动端 Lightroom 模式底部当前激活的一级 Tab ('looks' | 'light' | 'color' | 'export')
   const [mobileTab, setMobileTab] = useState('looks');
+
+  // 提取或保存原始原画底片
+  const handleExtractOriginal = async () => {
+    if (onExtractOriginal) {
+      onExtractOriginal(photoItem);
+      return;
+    }
+    try {
+      if (photoItem.isJpeg) {
+        const bytes = photoItem.previewBytes || new Uint8Array(await photoItem.file.arrayBuffer());
+        downloadJpegBytes(bytes, photoItem.name);
+        return;
+      }
+      let jpegBytes = photoItem.hdBytes || photoItem.previewBytes;
+      if (!jpegBytes && photoItem.file) {
+        const res = await extractPreviewWithInfo(photoItem.file);
+        jpegBytes = res.hdBytes || res.bytes;
+      }
+      if (jpegBytes) {
+        const baseName = photoItem.name.replace(/\.[^/.]+$/, '');
+        downloadJpegBytes(jpegBytes, `${baseName}_embedded_hd.jpg`);
+      }
+    } catch (e) {
+      alert('保存原图失败: ' + e.message);
+    }
+  };
+
+  // 旋转纠偏画面 90°
+  const handleRotate = () => {
+    if (onToggleOrientation && photoItem?.id) {
+      onToggleOrientation(photoItem.id);
+    }
+  };
 
   // 调色参数状态
   const [selectedLook, setSelectedLook] = useState('FL2');
@@ -381,9 +424,21 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
     try {
       const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
       let sourceImg = null;
-      let isRawSource = true;
+      let isRawSource = !photoItem?.isJpeg;
 
-      if (photoItem?.file) {
+      if (photoItem?.isJpeg && photoItem?.file) {
+        setExportProgress('正在读取相机原画 JPG...');
+        const orientedUrl = photoItem.previewUrl || (await createOrientedJpegUrl(
+          new Uint8Array(await photoItem.file.arrayBuffer()),
+          photoItem.orientationInfo?.exifOrientation || 1
+        ));
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.src = orientedUrl;
+        await img.decode();
+        sourceImg = img;
+        isRawSource = false;
+      } else if (photoItem?.file) {
         setExportProgress('正在执行 14-bit 原厂拜耳去马赛克全像素解码...');
         try {
           const decoder = new SonyRawDecoder();
@@ -429,7 +484,7 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
       }
 
       if (!sourceImg) {
-        throw new Error('未能加载可用的 RAW 像素源进行导出');
+        throw new Error(photoItem?.isJpeg ? '未能加载可用的 JPG 图像源' : '未能加载可用的 RAW 像素源进行导出');
       }
 
       const params = {
@@ -484,9 +539,21 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
     try {
       const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
       let sourceImg = null;
-      let isRawSource = true;
+      let isRawSource = !photoItem?.isJpeg;
 
-      if (photoItem?.file) {
+      if (photoItem?.isJpeg && photoItem?.file) {
+        setExportProgress('正在读取相机原画 JPG 并准备 16-bit 渲染...');
+        const orientedUrl = photoItem.previewUrl || (await createOrientedJpegUrl(
+          new Uint8Array(await photoItem.file.arrayBuffer()),
+          photoItem.orientationInfo?.exifOrientation || 1
+        ));
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.src = orientedUrl;
+        await img.decode();
+        sourceImg = img;
+        isRawSource = false;
+      } else if (photoItem?.file) {
         try {
           const decoder = new SonyRawDecoder();
           const decoded = await decoder.decode(photoItem.file, {
@@ -530,7 +597,7 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
       }
 
       if (!sourceImg) {
-        throw new Error('未能加载可用的 RAW 像素源进行导出');
+        throw new Error(photoItem?.isJpeg ? '未能加载可用的 JPG 图像源' : '未能加载可用的 RAW 像素源进行导出');
       }
 
       const params = {
@@ -799,62 +866,153 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
       </div>
 
       <div className="studio-actions-footer">
-        {/* 1. 核心：将外观写入 ARW */}
-        <button
-          className="studio-btn studio-btn-apply"
-          onClick={handleApplyToArw}
-          disabled={isExporting}
-          title="将当前外观预设直接写入 ARW 文件"
-        >
-          <CheckCircle2 size={18} />
-          <div className="btn-text-col">
-            <span className="btn-main-text">将此外观写入并导出 ARW</span>
-            <span className="btn-sub-text">索尼原厂无损标准 · 支持官方 Imaging Edge 自由调整</span>
-          </div>
-        </button>
+        {photoItem?.isJpeg ? (
+          <>
+            {/* 1. 核心：导出高质量渲染 JPEG */}
+            <button
+              className="studio-btn studio-btn-apply"
+              onClick={() => handleExportJpeg()}
+              disabled={isExporting}
+              title="导出应用当前创意外观 LUT 的高质量调色照片"
+            >
+              {isExporting ? (
+                <>
+                  <span className="spinner-mini" />
+                  <span>{exportProgress || '正在渲染导出...'}</span>
+                </>
+              ) : (
+                <>
+                  <Download size={18} />
+                  <div className="btn-text-col">
+                    <span className="btn-main-text">
+                      {fullResDims
+                        ? `导出高质量调色照片 (${fullResDims.width}×${fullResDims.height})`
+                        : '导出高质量调色照片 (JPG)'}
+                    </span>
+                    <span className="btn-sub-text">
+                      原厂 3D-LUT 胶片色彩渲染 · 保持原始高清分辨率
+                    </span>
+                  </div>
+                </>
+              )}
+            </button>
 
-        {/* 2. 导出 16-bit TIFF */}
-        <button
-          className="studio-btn studio-btn-tiff"
-          onClick={handleExport16BitTiff}
-          disabled={isExporting}
-          title="导出 16-bit 线性无损 TIFF (保留 14-bit RAW 全部动态范围，48位 RGB · Adobe RGB 广色域，供 Photoshop / Lightroom / Capture One 精修)"
-        >
-          <FileStack size={18} />
-          <div className="btn-text-col">
-            <span className="btn-main-text">导出 16-bit 无损母版 TIFF</span>
-            <span className="btn-sub-text">48-bit RGB · Adobe RGB 宽容度母版，保留 14-bit 满动态</span>
-          </div>
-        </button>
-
-        {/* 3. 导出高质量渲染 JPEG */}
-        <button
-          className="studio-btn studio-btn-export"
-          onClick={() => handleExportJpeg()}
-          disabled={isExporting}
-          title="导出高分辨率渲染 JPEG 文件"
-        >
-          {isExporting ? (
-            <>
-              <span className="spinner-mini" />
-              <span>{exportProgress || '正在渲染导出...'}</span>
-            </>
-          ) : (
-            <>
-              <Download size={18} />
+            {/* 2. 应用调色到列表卡片 */}
+            <button
+              className="studio-btn studio-btn-export"
+              onClick={handleApplyToArw}
+              disabled={isExporting}
+              title="将当前外观与调色参数应用保存到列表卡片中"
+            >
+              <CheckCircle2 size={18} />
               <div className="btn-text-col">
-                <span className="btn-main-text">
-                  {fullResDims
-                    ? `导出JPG (${fullResDims.width}×${fullResDims.height})`
-                    : '导出高质量照片 (JPG)'}
-                </span>
-                <span className="btn-sub-text">
-                  全画幅 3D-LUT 色彩渲染 · 即刻分享
-                </span>
+                <span className="btn-main-text">应用调色到列表卡片</span>
+                <span className="btn-sub-text">更新卡片缩略图与外观设置</span>
               </div>
-            </>
-          )}
-        </button>
+            </button>
+
+            {/* 3. 导出 16-bit TIFF */}
+            <button
+              className="studio-btn studio-btn-tiff"
+              onClick={handleExport16BitTiff}
+              disabled={isExporting}
+              title="导出 16-bit 线性无损 TIFF"
+            >
+              <FileStack size={18} />
+              <div className="btn-text-col">
+                <span className="btn-main-text">导出 16-bit 无损母版 TIFF</span>
+                <span className="btn-sub-text">48-bit RGB · Adobe RGB 宽容度母版，供 PS/LR 精修</span>
+              </div>
+            </button>
+
+            {/* 4. 保存原始照片 (未调色) */}
+            <button
+              className="studio-btn studio-btn-raw"
+              onClick={handleExtractOriginal}
+              disabled={isExporting}
+              title="保存未经调色的原始 JPG 照片"
+            >
+              <FileImage size={18} />
+              <div className="btn-text-col">
+                <span className="btn-main-text">保存原始 JPG (未调色原图)</span>
+                <span className="btn-sub-text">直接下载相机拍摄的原始文件</span>
+              </div>
+            </button>
+          </>
+        ) : (
+          <>
+            {/* 1. 核心：将外观写入 ARW */}
+            <button
+              className="studio-btn studio-btn-apply"
+              onClick={handleApplyToArw}
+              disabled={isExporting}
+              title="将当前外观预设直接写入 ARW 文件"
+            >
+              <CheckCircle2 size={18} />
+              <div className="btn-text-col">
+                <span className="btn-main-text">将此外观写入并导出 ARW</span>
+                <span className="btn-sub-text">索尼原厂无损标准 · 支持官方 Imaging Edge 自由调整</span>
+              </div>
+            </button>
+
+            {/* 2. 导出 16-bit TIFF */}
+            <button
+              className="studio-btn studio-btn-tiff"
+              onClick={handleExport16BitTiff}
+              disabled={isExporting}
+              title="导出 16-bit 线性无损 TIFF (保留 14-bit RAW 全部动态范围，48位 RGB · Adobe RGB 广色域，供 Photoshop / Lightroom / Capture One 精修)"
+            >
+              <FileStack size={18} />
+              <div className="btn-text-col">
+                <span className="btn-main-text">导出 16-bit 无损母版 TIFF</span>
+                <span className="btn-sub-text">48-bit RGB · Adobe RGB 宽容度母版，保留 14-bit 满动态</span>
+              </div>
+            </button>
+
+            {/* 3. 导出高质量渲染 JPEG */}
+            <button
+              className="studio-btn studio-btn-export"
+              onClick={() => handleExportJpeg()}
+              disabled={isExporting}
+              title="导出高分辨率渲染 JPEG 文件"
+            >
+              {isExporting ? (
+                <>
+                  <span className="spinner-mini" />
+                  <span>{exportProgress || '正在渲染导出...'}</span>
+                </>
+              ) : (
+                <>
+                  <Download size={18} />
+                  <div className="btn-text-col">
+                    <span className="btn-main-text">
+                      {fullResDims
+                        ? `导出全像素照片 (${fullResDims.width}×${fullResDims.height})`
+                        : '导出高质量照片 (JPG)'}
+                    </span>
+                    <span className="btn-sub-text">
+                      全画幅 3D-LUT 色彩渲染 · 即刻分享
+                    </span>
+                  </div>
+                </>
+              )}
+            </button>
+
+            {/* 4. 提取内嵌全尺寸高清 JPG */}
+            <button
+              className="studio-btn studio-btn-raw"
+              onClick={handleExtractOriginal}
+              disabled={isExporting}
+              title="提取 ARW 内部嵌入的全像素高清 JPG 原底"
+            >
+              <FileImage size={18} />
+              <div className="btn-text-col">
+                <span className="btn-main-text">提取内嵌全尺寸高清 JPG 原底</span>
+                <span className="btn-sub-text">原厂直出全像素内嵌底片 · 免转 RAW 即刻查看</span>
+              </div>
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
@@ -879,9 +1037,14 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
           {/* 中间：居中元信息 (文件名 + 拍摄参数 + 快门亮点) */}
           <div className="studio-title-group">
             <span className="studio-filename">{photoItem.name}</span>
-            <div className="studio-meta-sub">
+            <div
+              className="studio-meta-sub"
+              onClick={() => onOpenExif?.(photoItem)}
+              title="点击查看完整 EXIF 元数据"
+              style={{ cursor: 'pointer' }}
+            >
               {photoItem?.file && (
-                <span className="studio-badge-mini">14-bit RAW</span>
+                <span className="studio-badge-mini">{photoItem.isJpeg ? 'JPG 照片' : '14-bit RAW'}</span>
               )}
               {photoItem.exifResult?.overview?.shutterCount !== undefined && (
                 <span
@@ -904,8 +1067,28 @@ export default function LookStudioModal({ photoItem, onClose, onApplyToArw }) {
             </div>
           </div>
 
-          {/* 右侧：操作区 (原图对比、复位、分屏切换) */}
+          {/* 右侧：操作区 (原图对比、分屏切换、旋转、EXIF、复位) */}
           <div className="studio-top-actions">
+            {/* 旋转纠偏 90° */}
+            <button
+              className="view-btn"
+              onClick={handleRotate}
+              title="旋转纠偏画面 90°"
+            >
+              <RotateCw size={14} />
+              <span className="hide-on-mobile-text">旋转</span>
+            </button>
+
+            {/* 查看 EXIF 详情 */}
+            <button
+              className="view-btn"
+              onClick={() => onOpenExif?.(photoItem)}
+              title="查看完整 EXIF 元数据"
+            >
+              <Info size={14} />
+              <span className="hide-on-mobile-text">EXIF</span>
+            </button>
+
             {/* Lightroom 经典：按住对比原图 */}
             <button
               className={`view-btn hold-btn ${isHoldingOriginal ? 'holding' : ''}`}
